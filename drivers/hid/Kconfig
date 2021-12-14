@@ -147,6 +147,18 @@ config HID_APPLEIR
 
 	Say Y here if you want support for Apple infrared remote control.
 
+config HID_APPLEFT
+	tristate "Apple Force Touch Trackpad multi-touch support"
+	depends on HID
+	help
+	Support for the Apple Fource Touch Trackpad multi-touch.
+
+	This driver supports the multi-touch and pressure measure features of
+	the trackpad found on Apple MacBooks staring in 2015.
+
+	Say Y here if you want support for the multi-touch features of the
+	Fource Touch Trackpad on Apple MacBooks.
+
 config HID_ASUS
 	tristate "Asus"
 	depends on USB_HID
