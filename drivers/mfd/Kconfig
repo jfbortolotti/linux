@@ -1081,6 +1081,20 @@ config MFD_SPMI_PMIC
 	  Say M here if you want to include support for the SPMI PMIC
 	  series as a module.  The module will be called "qcom-spmi-pmic".
 
+config MFD_APPLE_SPMI_SERA_PMU
+	tristate "Apple SPMI SERA PMU"
+	depends on ARCH_APPLE || COMPILE_TEST
+	depends on OF
+	depends on SPMI
+	select REGMAP_SPMI
+	help
+	  This enables support for the Apple M1 SERA PMU on SPMI bus.
+	  Note, that this will only be useful paired with descriptions
+	  of the independent functions as children nodes in the device tree.
+
+	  Say M here if you want to include support for the SPMI SERA PMU
+	  series as a module.  The module will be called "apple-spmi-sera-pmu".
+
 config MFD_RDC321X
 	tristate "RDC R-321x southbridge"
 	select MFD_CORE
