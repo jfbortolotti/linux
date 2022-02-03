@@ -12,6 +12,8 @@
 #include <dt-bindings/interrupt-controller/irq.h>
 #include <dt-bindings/pinctrl/apple.h>
 #include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/spmi/spmi.h>
+
 
 / {
 	compatible = "apple,t8103", "apple,arm-platform";
@@ -200,6 +202,24 @@
 			#size-cells = <0>;
 			status = "disabled"; /* only used in J293/J313 */
 		};
+
+		spmi0: spmi@23d0d9300 {
+			compatible = "apple,spmi";
+			reg = <0x2 0x3d0d9300 0x0 0x100>;
+			#address-cells = <2>;
+			#size-cells = <0>;
+
+			pmu-sera@0 {
+				compatible = "apple,spmi-sera-pmu";
+				reg = <0xf SPMI_USID>;
+
+				rtc@0 {
+					compatible = "apple,pmu-sera-rtc";
+				};
+			};
+		};
+
+
 
 		serial0: serial@235200000 {
 			compatible = "apple,s5l-uart";
