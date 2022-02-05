@@ -18,11 +18,11 @@ etc.) added into the table.
 
 In case of detected corruption, the kernel is crashed. There is a small
 performance and memory overhead associated with the page table check. Therefore,
-it is disabled by default, but can be optionally be enabled on systems where
-the extra hardening outweighs the performance costs. Also, because page table
-check is synchronous, it can help with debugging double map memory corruption
-issues, by crashing kernel at the time wrong mapping occurs instead of later
-which is often the case with memory corruptions bugs.
+it is disabled by default, but can be optionally enabled on systems where the
+extra hardening outweighs the performance costs. Also, because page table check
+is synchronous, it can help with debugging double map memory corruption issues,
+by crashing kernel at the time wrong mapping occurs instead of later which is
+often the case with memory corruptions bugs.
 
 Double mapping detection logic
 ==============================

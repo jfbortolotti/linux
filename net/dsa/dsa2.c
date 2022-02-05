@@ -248,12 +248,8 @@ static struct dsa_switch_tree *dsa_tree_alloc(int index)
 
 static void dsa_tree_free(struct dsa_switch_tree *dst)
 {
-	if (dst->tag_ops) {
-		if (dst->tag_ops->disconnect)
-			dst->tag_ops->disconnect(dst);
-
+	if (dst->tag_ops)
 		dsa_tag_driver_put(dst->tag_ops);
-	}
 	list_del(&dst->list);
 	kfree(dst);
 }
@@ -565,6 +561,7 @@ static void dsa_port_teardown(struct dsa_port *dp)
 	struct devlink_port *dlp = &dp->devlink_port;
 	struct dsa_switch *ds = dp->ds;
 	struct dsa_mac_addr *a, *tmp;
+	struct net_device *slave;
 
 	if (!dp->setup)
 		return;
@@ -586,9 +583,11 @@ static void dsa_port_teardown(struct dsa_port *dp)
 		dsa_port_link_unregister_of(dp);
 		break;
 	case DSA_PORT_TYPE_USER:
-		if (dp->slave) {
-			dsa_slave_destroy(dp->slave);
+		slave = dp->slave;
+
+		if (slave) {
 			dp->slave = NULL;
+			dsa_slave_destroy(slave);
 		}
 		break;
 	}
@@ -841,17 +840,29 @@ static int dsa_switch_setup_tag_protocol(struct dsa_switch *ds)
 	}
 
 connect:
+	if (tag_ops->connect) {
+		err = tag_ops->connect(ds);
+		if (err)
+			return err;
+	}
+
 	if (ds->ops->connect_tag_protocol) {
 		err = ds->ops->connect_tag_protocol(ds, tag_ops->proto);
 		if (err) {
 			dev_err(ds->dev,
 				"Unable to connect to tag protocol \"%s\": %pe\n",
 				tag_ops->name, ERR_PTR(err));
-			return err;
+			goto disconnect;
 		}
 	}
 
 	return 0;
+
+disconnect:
+	if (tag_ops->disconnect)
+		tag_ops->disconnect(ds);
+
+	return err;
 }
 
 static int dsa_switch_setup(struct dsa_switch *ds)
@@ -995,23 +1006,28 @@ static void dsa_tree_teardown_switches(struct dsa_switch_tree *dst)
 		dsa_switch_teardown(dp->ds);
 }
 
-static int dsa_tree_setup_switches(struct dsa_switch_tree *dst)
+/* Bring shared ports up first, then non-shared ports */
+static int dsa_tree_setup_ports(struct dsa_switch_tree *dst)
 {
 	struct dsa_port *dp;
-	int err;
+	int err = 0;
 
 	list_for_each_entry(dp, &dst->ports, list) {
-		err = dsa_switch_setup(dp->ds);
-		if (err)
-			goto teardown;
+		if (dsa_port_is_dsa(dp) || dsa_port_is_cpu(dp)) {
+			err = dsa_port_setup(dp);
+			if (err)
+				goto teardown;
+		}
 	}
 
 	list_for_each_entry(dp, &dst->ports, list) {
-		err = dsa_port_setup(dp);
-		if (err) {
-			err = dsa_port_reinit_as_unused(dp);
-			if (err)
-				goto teardown;
+		if (dsa_port_is_user(dp) || dsa_port_is_unused(dp)) {
+			err = dsa_port_setup(dp);
+			if (err) {
+				err = dsa_port_reinit_as_unused(dp);
+				if (err)
+					goto teardown;
+			}
 		}
 	}
 
@@ -1020,7 +1036,21 @@ static int dsa_tree_setup_switches(struct dsa_switch_tree *dst)
 teardown:
 	dsa_tree_teardown_ports(dst);
 
-	dsa_tree_teardown_switches(dst);
+	return err;
+}
+
+static int dsa_tree_setup_switches(struct dsa_switch_tree *dst)
+{
+	struct dsa_port *dp;
+	int err = 0;
+
+	list_for_each_entry(dp, &dst->ports, list) {
+		err = dsa_switch_setup(dp->ds);
+		if (err) {
+			dsa_tree_teardown_switches(dst);
+			break;
+		}
+	}
 
 	return err;
 }
@@ -1030,6 +1060,8 @@ static int dsa_tree_setup_master(struct dsa_switch_tree *dst)
 	struct dsa_port *dp;
 	int err;
 
+	rtnl_lock();
+
 	list_for_each_entry(dp, &dst->ports, list) {
 		if (dsa_port_is_cpu(dp)) {
 			err = dsa_master_setup(dp->master, dp);
@@ -1038,6 +1070,8 @@ static int dsa_tree_setup_master(struct dsa_switch_tree *dst)
 		}
 	}
 
+	rtnl_unlock();
+
 	return 0;
 }
 
@@ -1045,9 +1079,13 @@ static void dsa_tree_teardown_master(struct dsa_switch_tree *dst)
 {
 	struct dsa_port *dp;
 
+	rtnl_lock();
+
 	list_for_each_entry(dp, &dst->ports, list)
 		if (dsa_port_is_cpu(dp))
 			dsa_master_teardown(dp->master);
+
+	rtnl_unlock();
 }
 
 static int dsa_tree_setup_lags(struct dsa_switch_tree *dst)
@@ -1103,9 +1141,13 @@ static int dsa_tree_setup(struct dsa_switch_tree *dst)
 	if (err)
 		goto teardown_switches;
 
-	err = dsa_tree_setup_lags(dst);
+	err = dsa_tree_setup_ports(dst);
 	if (err)
 		goto teardown_master;
+
+	err = dsa_tree_setup_lags(dst);
+	if (err)
+		goto teardown_ports;
 
 	dst->setup = true;
 
@@ -1113,10 +1155,11 @@ static int dsa_tree_setup(struct dsa_switch_tree *dst)
 
 	return 0;
 
+teardown_ports:
+	dsa_tree_teardown_ports(dst);
 teardown_master:
 	dsa_tree_teardown_master(dst);
 teardown_switches:
-	dsa_tree_teardown_ports(dst);
 	dsa_tree_teardown_switches(dst);
 teardown_cpu_ports:
 	dsa_tree_teardown_cpu_ports(dst);
@@ -1133,9 +1176,9 @@ static void dsa_tree_teardown(struct dsa_switch_tree *dst)
 
 	dsa_tree_teardown_lags(dst);
 
-	dsa_tree_teardown_master(dst);
-
 	dsa_tree_teardown_ports(dst);
+
+	dsa_tree_teardown_master(dst);
 
 	dsa_tree_teardown_switches(dst);
 
@@ -1160,13 +1203,6 @@ static int dsa_tree_bind_tag_proto(struct dsa_switch_tree *dst,
 
 	dst->tag_ops = tag_ops;
 
-	/* Notify the new tagger about the connection to this tree */
-	if (tag_ops->connect) {
-		err = tag_ops->connect(dst);
-		if (err)
-			goto out_revert;
-	}
-
 	/* Notify the switches from this tree about the connection
 	 * to the new tagger
 	 */
@@ -1176,16 +1212,14 @@ static int dsa_tree_bind_tag_proto(struct dsa_switch_tree *dst,
 		goto out_disconnect;
 
 	/* Notify the old tagger about the disconnection from this tree */
-	if (old_tag_ops->disconnect)
-		old_tag_ops->disconnect(dst);
+	info.tag_ops = old_tag_ops;
+	dsa_tree_notify(dst, DSA_NOTIFIER_TAG_PROTO_DISCONNECT, &info);
 
 	return 0;
 
 out_disconnect:
-	/* Revert the new tagger's connection to this tree */
-	if (tag_ops->disconnect)
-		tag_ops->disconnect(dst);
-out_revert:
+	info.tag_ops = tag_ops;
+	dsa_tree_notify(dst, DSA_NOTIFIER_TAG_PROTO_DISCONNECT, &info);
 	dst->tag_ops = old_tag_ops;
 
 	return err;
@@ -1318,7 +1352,6 @@ static int dsa_port_parse_cpu(struct dsa_port *dp, struct net_device *master,
 	struct dsa_switch_tree *dst = ds->dst;
 	const struct dsa_device_ops *tag_ops;
 	enum dsa_tag_protocol default_proto;
-	int err;
 
 	/* Find out which protocol the switch would prefer. */
 	default_proto = dsa_get_tag_protocol(dp, master);
@@ -1366,12 +1399,6 @@ static int dsa_port_parse_cpu(struct dsa_port *dp, struct net_device *master,
 		 */
 		dsa_tag_driver_put(tag_ops);
 	} else {
-		if (tag_ops->connect) {
-			err = tag_ops->connect(dst);
-			if (err)
-				return err;
-		}
-
 		dst->tag_ops = tag_ops;
 	}
 
@@ -1448,7 +1475,7 @@ static int dsa_switch_parse_ports_of(struct dsa_switch *ds,
 		}
 
 		if (reg >= ds->num_ports) {
-			dev_err(ds->dev, "port %pOF index %u exceeds num_ports (%zu)\n",
+			dev_err(ds->dev, "port %pOF index %u exceeds num_ports (%u)\n",
 				port, reg, ds->num_ports);
 			of_node_put(port);
 			err = -EINVAL;

@@ -84,6 +84,7 @@ nfs_file_release(struct inode *inode, struct file *filp)
 
 	nfs_inc_stats(inode, NFSIOS_VFSRELEASE);
 	nfs_file_clear_open_context(filp);
+	nfs_fscache_release_file(inode, filp);
 	return 0;
 }
 EXPORT_SYMBOL_GPL(nfs_file_release);

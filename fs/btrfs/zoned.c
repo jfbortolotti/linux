@@ -375,6 +375,8 @@ int btrfs_get_dev_zone_info(struct btrfs_device *device, bool populate_cache)
 	if (!zone_info)
 		return -ENOMEM;
 
+	device->zone_info = zone_info;
+
 	if (!bdev_is_zoned(bdev)) {
 		if (!fs_info->zone_size) {
 			ret = calculate_emulated_zone_size(fs_info);
@@ -459,8 +461,6 @@ int btrfs_get_dev_zone_info(struct btrfs_device *device, bool populate_cache)
 			goto out;
 		}
 	}
-
-	device->zone_info = zone_info;
 
 	/* Get zones type */
 	nactive = 0;
@@ -592,12 +592,7 @@ int btrfs_get_dev_zone_info(struct btrfs_device *device, bool populate_cache)
 out:
 	kfree(zones);
 out_free_zone_info:
-	bitmap_free(zone_info->active_zones);
-	bitmap_free(zone_info->empty_zones);
-	bitmap_free(zone_info->seq_zones);
-	vfree(zone_info->zone_cache);
-	kfree(zone_info);
-	device->zone_info = NULL;
+	btrfs_destroy_dev_zone_info(device);
 
 	return ret;
 }
@@ -612,6 +607,7 @@ void btrfs_destroy_dev_zone_info(struct btrfs_device *device)
 	bitmap_free(zone_info->active_zones);
 	bitmap_free(zone_info->seq_zones);
 	bitmap_free(zone_info->empty_zones);
+	vfree(zone_info->zone_cache);
 	kfree(zone_info);
 	device->zone_info = NULL;
 }
@@ -1158,7 +1154,7 @@ static int calculate_alloc_pointer(struct btrfs_block_group *cache,
 				   u64 *offset_ret)
 {
 	struct btrfs_fs_info *fs_info = cache->fs_info;
-	struct btrfs_root *root = fs_info->extent_root;
+	struct btrfs_root *root;
 	struct btrfs_path *path;
 	struct btrfs_key key;
 	struct btrfs_key found_key;
@@ -1173,6 +1169,7 @@ static int calculate_alloc_pointer(struct btrfs_block_group *cache,
 	key.type = 0;
 	key.offset = 0;
 
+	root = btrfs_extent_root(fs_info, key.objectid);
 	ret = btrfs_search_slot(NULL, root, &key, path, 0, 0);
 	/* We should not find the exact match */
 	if (!ret)
@@ -1640,29 +1637,19 @@ bool btrfs_check_meta_write_pointer(struct btrfs_fs_info *fs_info,
 	if (!btrfs_is_zoned(fs_info))
 		return true;
 
-	cache = *cache_ret;
+	cache = btrfs_lookup_block_group(fs_info, eb->start);
+	if (!cache)
+		return true;
 
-	if (cache && (eb->start < cache->start ||
-		      cache->start + cache->length <= eb->start)) {
+	if (cache->meta_write_pointer != eb->start) {
 		btrfs_put_block_group(cache);
 		cache = NULL;
-		*cache_ret = NULL;
+		ret = false;
+	} else {
+		cache->meta_write_pointer = eb->start + eb->len;
 	}
 
-	if (!cache)
-		cache = btrfs_lookup_block_group(fs_info, eb->start);
-
-	if (cache) {
-		if (cache->meta_write_pointer != eb->start) {
-			btrfs_put_block_group(cache);
-			cache = NULL;
-			ret = false;
-		} else {
-			cache->meta_write_pointer = eb->start + eb->len;
-		}
-
-		*cache_ret = cache;
-	}
+	*cache_ret = cache;
 
 	return ret;
 }
@@ -1938,7 +1925,7 @@ int btrfs_zone_finish(struct btrfs_block_group *block_group)
 	return ret;
 }
 
-bool btrfs_can_activate_zone(struct btrfs_fs_devices *fs_devices, int raid_index)
+bool btrfs_can_activate_zone(struct btrfs_fs_devices *fs_devices, u64 flags)
 {
 	struct btrfs_device *device;
 	bool ret = false;
@@ -1947,8 +1934,7 @@ bool btrfs_can_activate_zone(struct btrfs_fs_devices *fs_devices, int raid_index
 		return true;
 
 	/* Non-single profiles are not supported yet */
-	if (raid_index != BTRFS_RAID_SINGLE)
-		return false;
+	ASSERT((flags & BTRFS_BLOCK_GROUP_PROFILE_MASK) == 0);
 
 	/* Check if there is a device with active zones left */
 	mutex_lock(&fs_devices->device_list_mutex);

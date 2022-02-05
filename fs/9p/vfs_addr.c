@@ -16,6 +16,7 @@
 #include <linux/pagemap.h>
 #include <linux/idr.h>
 #include <linux/sched.h>
+#include <linux/swap.h>
 #include <linux/uio.h>
 #include <linux/netfs.h>
 #include <net/9p/9p.h>
@@ -42,6 +43,11 @@ static void v9fs_req_issue_op(struct netfs_read_subrequest *subreq)
 	iov_iter_xarray(&to, READ, &rreq->mapping->i_pages, pos, len);
 
 	total = p9_client_read(fid, pos, &to, &err);
+
+	/* if we just extended the file size, any portion not in
+	 * cache won't be on server and is zeroes */
+	__set_bit(NETFS_SREQ_CLEAR_TAIL, &subreq->flags);
+
 	netfs_subreq_terminated(subreq, err ?: total, false);
 }
 
@@ -143,7 +149,7 @@ static int v9fs_release_page(struct page *page, gfp_t gfp)
 		return 0;
 #ifdef CONFIG_9P_FSCACHE
 	if (folio_test_fscache(folio)) {
-		if (!gfpflags_allow_blocking(gfp) || !(gfp & __GFP_FS))
+		if (current_is_kswapd() || !(gfp & __GFP_FS))
 			return 0;
 		folio_wait_fscache(folio);
 	}
@@ -171,12 +177,14 @@ static void v9fs_write_to_cache_done(void *priv, ssize_t transferred_or_error,
 				     bool was_async)
 {
 	struct v9fs_inode *v9inode = priv;
+	__le32 version;
 
 	if (IS_ERR_VALUE(transferred_or_error) &&
-	    transferred_or_error != -ENOBUFS)
-		fscache_invalidate(v9fs_inode_cookie(v9inode),
-				   &v9inode->qid.version,
+	    transferred_or_error != -ENOBUFS) {
+		version = cpu_to_le32(v9inode->qid.version);
+		fscache_invalidate(v9fs_inode_cookie(v9inode), &version,
 				   i_size_read(&v9inode->vfs_inode), 0);
+	}
 }
 
 static int v9fs_vfs_write_folio_locked(struct folio *folio)

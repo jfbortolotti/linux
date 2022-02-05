@@ -15,9 +15,17 @@ description:
 
 properties:
   compatible:
-    enum:
-      - brcm,bcm2835-vchiq
-      - brcm,bcm2836-vchiq
+    oneOf:
+      - description: BCM2835 based boards
+        items:
+          - enum:
+              - brcm,bcm2835-vchiq
+
+      - description: BCM2836/BCM2837 based boards
+        items:
+          - enum:
+              - brcm,bcm2836-vchiq
+          - const: brcm,bcm2835-vchiq
 
   reg:
     description: Physical base address and length of the doorbell register pair

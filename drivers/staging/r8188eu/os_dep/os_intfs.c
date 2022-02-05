@@ -11,7 +11,7 @@
 #include "../include/rtw_ioctl.h"
 #include "../include/usb_osintf.h"
 #include "../include/rtw_br_ext.h"
-#include "../include/rtl8188e_led.h"
+#include "../include/rtw_led.h"
 #include "../include/rtl8188e_dm.h"
 
 MODULE_LICENSE("GPL");
@@ -760,10 +760,6 @@ int netdev_close(struct net_device *pnetdev)
 	struct adapter *padapter = (struct adapter *)rtw_netdev_priv(pnetdev);
 	struct dvobj_priv *dvobj = adapter_to_dvobj(padapter);
 
-	if (padapter->pwrctrlpriv.bInternalAutoSuspend) {
-		if (padapter->pwrctrlpriv.rf_pwrstate == rf_off)
-			padapter->pwrctrlpriv.ps_flag = true;
-	}
 	padapter->net_closed = true;
 
 	if (padapter->pwrctrlpriv.rf_pwrstate == rf_on) {

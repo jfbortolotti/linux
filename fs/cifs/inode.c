@@ -952,6 +952,12 @@ cifs_get_inode_info(struct inode **inode,
 		rc = server->ops->query_path_info(xid, tcon, cifs_sb,
 						 full_path, tmp_data,
 						 &adjust_tz, &is_reparse_point);
+#ifdef CONFIG_CIFS_DFS_UPCALL
+		if (rc == -ENOENT && is_tcon_dfs(tcon))
+			rc = cifs_dfs_query_info_nonascii_quirk(xid, tcon,
+								cifs_sb,
+								full_path);
+#endif
 		data = tmp_data;
 	}
 
@@ -1353,11 +1359,6 @@ iget_no_retry:
 		goto out;
 	}
 
-#ifdef CONFIG_CIFS_FSCACHE
-	/* populate tcon->resource_id */
-	tcon->resource_id = CIFS_I(inode)->uniqueid;
-#endif
-
 	if (rc && tcon->pipe) {
 		cifs_dbg(FYI, "ipc connection - fake read inode\n");
 		spin_lock(&inode->i_lock);
@@ -1371,19 +1372,6 @@ iget_no_retry:
 	} else if (rc) {
 		iget_failed(inode);
 		inode = ERR_PTR(rc);
-	}
-
-	if (!rc) {
-		/*
-		 * The cookie is initialized from volume info returned above.
-		 * Inside cifs_fscache_get_super_cookie it checks
-		 * that we do not get super cookie twice.
-		 */
-		rc = cifs_fscache_get_super_cookie(tcon);
-		if (rc < 0) {
-			iget_failed(inode);
-			inode = ERR_PTR(rc);
-		}
 	}
 
 out:
@@ -2273,7 +2261,7 @@ cifs_dentry_needs_reval(struct dentry *dentry)
 int
 cifs_invalidate_mapping(struct inode *inode)
 {
-	struct cifs_fscache_inode_auxdata auxdata;
+	struct cifs_fscache_inode_coherency_data cd;
 	struct cifsInodeInfo *cifsi = CIFS_I(inode);
 	int rc = 0;
 
@@ -2284,8 +2272,8 @@ cifs_invalidate_mapping(struct inode *inode)
 				 __func__, inode);
 	}
 
-	cifs_fscache_fill_auxdata(&cifsi->vfs_inode, &auxdata);
-	fscache_invalidate(cifs_inode_cookie(inode), &auxdata, i_size_read(inode), 0);
+	cifs_fscache_fill_coherency(&cifsi->vfs_inode, &cd);
+	fscache_invalidate(cifs_inode_cookie(inode), &cd, i_size_read(inode), 0);
 	return rc;
 }
 

@@ -463,7 +463,7 @@ See the mbind(2) man page for more details.
 Set home node for a Range of Task's Address Spacec::
 
 	long sys_set_mempolicy_home_node(unsigned long start, unsigned long len,
-  					 unsigned long home_node,
+					 unsigned long home_node,
 					 unsigned long flags);
 
 sys_set_mempolicy_home_node set the home node for a VMA policy present in the

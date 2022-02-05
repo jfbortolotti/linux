@@ -50,5 +50,5 @@ error_dir:
  */
 void fscache_proc_cleanup(void)
 {
-	remove_proc_entry("fs/fscache", NULL);
+	remove_proc_subtree("fs/fscache", NULL);
 }

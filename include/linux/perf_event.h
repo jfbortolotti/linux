@@ -132,6 +132,15 @@ struct hw_perf_event_extra {
 };
 
 /**
+ * hw_perf_event::flag values
+ *
+ * PERF_EVENT_FLAG_ARCH bits are reserved for architecture-specific
+ * usage.
+ */
+#define PERF_EVENT_FLAG_ARCH			0x0000ffff
+#define PERF_EVENT_FLAG_USER_READ_CNT		0x80000000
+
+/**
  * struct hw_perf_event - performance event hardware details:
  */
 struct hw_perf_event {
@@ -613,6 +622,7 @@ struct swevent_hlist {
 #define PERF_ATTACH_SCHED_CB	0x20
 #define PERF_ATTACH_CHILD	0x40
 
+struct bpf_prog;
 struct perf_cgroup;
 struct perf_buffer;
 
@@ -824,6 +834,7 @@ struct perf_event_context {
 
 	int				nr_events;
 	int				nr_active;
+	int				nr_user;
 	int				is_active;
 	int				nr_stat;
 	int				nr_freq;

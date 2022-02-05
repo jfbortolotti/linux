@@ -1134,9 +1134,8 @@ int reg_reload_regdb(void)
 	request->wiphy_idx = WIPHY_IDX_INVALID;
 	request->alpha2[0] = current_regdomain->alpha2[0];
 	request->alpha2[1] = current_regdomain->alpha2[1];
-	request->initiator = NL80211_USER_REG_HINT_USER;
+	request->initiator = NL80211_REGDOM_SET_BY_CORE;
 	request->user_reg_hint_type = NL80211_USER_REG_HINT_USER;
-	request->reload = true;
 
 	reg_process_hint(request);
 
@@ -2360,6 +2359,7 @@ static bool reg_wdev_chan_valid(struct wiphy *wiphy, struct wireless_dev *wdev)
 	struct cfg80211_chan_def chandef = {};
 	struct cfg80211_registered_device *rdev = wiphy_to_rdev(wiphy);
 	enum nl80211_iftype iftype;
+	bool ret;
 
 	wdev_lock(wdev);
 	iftype = wdev->iftype;
@@ -2371,6 +2371,7 @@ static bool reg_wdev_chan_valid(struct wiphy *wiphy, struct wireless_dev *wdev)
 	switch (iftype) {
 	case NL80211_IFTYPE_AP:
 	case NL80211_IFTYPE_P2P_GO:
+	case NL80211_IFTYPE_MESH_POINT:
 		if (!wdev->beacon_interval)
 			goto wdev_inactive_unlock;
 		chandef = wdev->chandef;
@@ -2409,7 +2410,12 @@ static bool reg_wdev_chan_valid(struct wiphy *wiphy, struct wireless_dev *wdev)
 	case NL80211_IFTYPE_AP:
 	case NL80211_IFTYPE_P2P_GO:
 	case NL80211_IFTYPE_ADHOC:
-		return cfg80211_reg_can_beacon_relax(wiphy, &chandef, iftype);
+	case NL80211_IFTYPE_MESH_POINT:
+		wiphy_lock(wiphy);
+		ret = cfg80211_reg_can_beacon_relax(wiphy, &chandef, iftype);
+		wiphy_unlock(wiphy);
+
+		return ret;
 	case NL80211_IFTYPE_STATION:
 	case NL80211_IFTYPE_P2P_CLIENT:
 		return cfg80211_chandef_usable(wiphy, &chandef,
@@ -2712,8 +2718,7 @@ reg_process_hint_user(struct regulatory_request *user_request)
 
 	treatment = __reg_process_hint_user(user_request);
 	if (treatment == REG_REQ_IGNORE ||
-	    (treatment == REG_REQ_ALREADY_SET &&
-	     !user_request->reload))
+	    treatment == REG_REQ_ALREADY_SET)
 		return REG_REQ_IGNORE;
 
 	user_request->intersect = treatment == REG_REQ_INTERSECT;

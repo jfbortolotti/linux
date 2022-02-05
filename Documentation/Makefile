@@ -88,7 +88,7 @@ quiet_cmd_sphinx = SPHINX  $@ --> file://$(abspath $(BUILDDIR)/$3/$4)
 	$(abspath $(srctree)/$(src)/$5) \
 	$(abspath $(BUILDDIR)/$3/$4) && \
 	if [ "x$(DOCS_CSS)" != "x" ]; then \
-		cp $(DOCS_CSS) $(BUILDDIR)/$3/_static/; \
+		cp $(if $(patsubst /%,,$(DOCS_CSS)),$(abspath $(srctree)/$(DOCS_CSS)),$(DOCS_CSS)) $(BUILDDIR)/$3/_static/; \
 	fi
 
 htmldocs:
@@ -159,8 +159,8 @@ dochelp:
 	@echo  '  make SPHINX_CONF={conf-file} [target] use *additional* sphinx-build'
 	@echo  '  configuration. This is e.g. useful to build with nit-picking config.'
 	@echo
-	@echo '   make DOCS_THEME={sphinx-theme} selects a different Sphinx theme.'
+	@echo  '  make DOCS_THEME={sphinx-theme} selects a different Sphinx theme.'
 	@echo
-	@echo '   make DOCS_CSS={a .css file} adds a DOCS_CSS override file for html/epub output.'
+	@echo  '  make DOCS_CSS={a .css file} adds a DOCS_CSS override file for html/epub output.'
 	@echo
 	@echo  '  Default location for the generated documents is Documentation/output'

@@ -1573,7 +1573,7 @@ static int hns_roce_query_func_info(struct hns_roce_dev *hr_dev)
 	struct hns_roce_cmq_desc desc;
 	int ret;
 
-	if (hr_dev->pci_dev->revision < PCI_REVISION_ID_HIP09) {
+	if (hr_dev->pci_dev->revision == PCI_REVISION_ID_HIP08) {
 		hr_dev->func_num = 1;
 		return 0;
 	}
@@ -1596,11 +1596,17 @@ static int hns_roce_config_global_param(struct hns_roce_dev *hr_dev)
 {
 	struct hns_roce_cmq_desc desc;
 	struct hns_roce_cmq_req *req = (struct hns_roce_cmq_req *)desc.data;
+	u32 clock_cycles_of_1us;
 
 	hns_roce_cmq_setup_basic_desc(&desc, HNS_ROCE_OPC_CFG_GLOBAL_PARAM,
 				      false);
 
-	hr_reg_write(req, CFG_GLOBAL_PARAM_1US_CYCLES, 0x3e8);
+	if (hr_dev->pci_dev->revision == PCI_REVISION_ID_HIP08)
+		clock_cycles_of_1us = HNS_ROCE_1NS_CFG;
+	else
+		clock_cycles_of_1us = HNS_ROCE_1US_CFG;
+
+	hr_reg_write(req, CFG_GLOBAL_PARAM_1US_CYCLES, clock_cycles_of_1us);
 	hr_reg_write(req, CFG_GLOBAL_PARAM_UDP_PORT, ROCE_V2_UDP_DPORT);
 
 	return hns_roce_cmq_send(hr_dev, &desc, 1);
@@ -1999,7 +2005,8 @@ static void set_default_caps(struct hns_roce_dev *hr_dev)
 	caps->gid_table_len[0] = HNS_ROCE_V2_GID_INDEX_NUM;
 
 	if (hr_dev->pci_dev->revision >= PCI_REVISION_ID_HIP09) {
-		caps->flags |= HNS_ROCE_CAP_FLAG_STASH;
+		caps->flags |= HNS_ROCE_CAP_FLAG_STASH |
+			       HNS_ROCE_CAP_FLAG_DIRECT_WQE;
 		caps->max_sq_inline = HNS_ROCE_V3_MAX_SQ_INLINE;
 	} else {
 		caps->max_sq_inline = HNS_ROCE_V2_MAX_SQ_INLINE;
@@ -2140,7 +2147,6 @@ static void apply_func_caps(struct hns_roce_dev *hr_dev)
 	caps->cqc_timer_entry_sz = HNS_ROCE_V2_CQC_TIMER_ENTRY_SZ;
 	caps->mtt_entry_sz = HNS_ROCE_V2_MTT_ENTRY_SZ;
 
-	caps->eqe_hop_num = HNS_ROCE_EQE_HOP_NUM;
 	caps->pbl_hop_num = HNS_ROCE_PBL_HOP_NUM;
 	caps->qpc_timer_hop_num = HNS_ROCE_HOP_NUM_0;
 	caps->cqc_timer_hop_num = HNS_ROCE_HOP_NUM_0;
@@ -2157,6 +2163,7 @@ static void apply_func_caps(struct hns_roce_dev *hr_dev)
 				  (u32)priv->handle->rinfo.num_vectors - 2);
 
 	if (hr_dev->pci_dev->revision >= PCI_REVISION_ID_HIP09) {
+		caps->eqe_hop_num = HNS_ROCE_V3_EQE_HOP_NUM;
 		caps->ceqe_size = HNS_ROCE_V3_EQE_SIZE;
 		caps->aeqe_size = HNS_ROCE_V3_EQE_SIZE;
 
@@ -2177,6 +2184,7 @@ static void apply_func_caps(struct hns_roce_dev *hr_dev)
 	} else {
 		u32 func_num = max_t(u32, 1, hr_dev->func_num);
 
+		caps->eqe_hop_num = HNS_ROCE_V2_EQE_HOP_NUM;
 		caps->ceqe_size = HNS_ROCE_CEQE_SIZE;
 		caps->aeqe_size = HNS_ROCE_AEQE_SIZE;
 		caps->gid_table_len[0] /= func_num;
@@ -2389,7 +2397,7 @@ static int hns_roce_config_entry_size(struct hns_roce_dev *hr_dev)
 	struct hns_roce_caps *caps = &hr_dev->caps;
 	int ret;
 
-	if (hr_dev->pci_dev->revision < PCI_REVISION_ID_HIP09)
+	if (hr_dev->pci_dev->revision == PCI_REVISION_ID_HIP08)
 		return 0;
 
 	ret = config_hem_entry_size(hr_dev, HNS_ROCE_CFG_QPC_SIZE,
@@ -2963,8 +2971,8 @@ static int config_gmv_table(struct hns_roce_dev *hr_dev,
 	return hns_roce_cmq_send(hr_dev, desc, 2);
 }
 
-static int hns_roce_v2_set_gid(struct hns_roce_dev *hr_dev, u32 port,
-			       int gid_index, const union ib_gid *gid,
+static int hns_roce_v2_set_gid(struct hns_roce_dev *hr_dev, int gid_index,
+			       const union ib_gid *gid,
 			       const struct ib_gid_attr *attr)
 {
 	enum hns_roce_sgid_type sgid_type = GID_TYPE_FLAG_ROCE_V1;
@@ -3059,8 +3067,7 @@ static int set_mtpt_pbl(struct hns_roce_dev *hr_dev,
 }
 
 static int hns_roce_v2_write_mtpt(struct hns_roce_dev *hr_dev,
-				  void *mb_buf, struct hns_roce_mr *mr,
-				  unsigned long mtpt_idx)
+				  void *mb_buf, struct hns_roce_mr *mr)
 {
 	struct hns_roce_v2_mpt_entry *mpt_entry;
 	int ret;
@@ -4484,14 +4491,6 @@ static int modify_qp_rtr_to_rts(struct ib_qp *ibqp,
 	return 0;
 }
 
-static inline u16 get_udp_sport(u32 fl, u32 lqpn, u32 rqpn)
-{
-	if (!fl)
-		fl = rdma_calc_flow_label(lqpn, rqpn);
-
-	return rdma_flow_label_to_udp_sport(fl);
-}
-
 static int get_dip_ctx_idx(struct ib_qp *ibqp, const struct ib_qp_attr *attr,
 			   u32 *dip_idx)
 {
@@ -4708,8 +4707,9 @@ static int hns_roce_v2_set_path(struct ib_qp *ibqp,
 	}
 
 	hr_reg_write(context, QPC_UDPSPN,
-		     is_udp ? get_udp_sport(grh->flow_label, ibqp->qp_num,
-					    attr->dest_qp_num) : 0);
+		     is_udp ? rdma_get_udp_sport(grh->flow_label, ibqp->qp_num,
+						 attr->dest_qp_num) :
+				    0);
 
 	hr_reg_clear(qpc_mask, QPC_UDPSPN);
 
@@ -4805,6 +4805,30 @@ static int hns_roce_v2_set_abs_fields(struct ib_qp *ibqp,
 	return ret;
 }
 
+static bool check_qp_timeout_cfg_range(struct hns_roce_dev *hr_dev, u8 *timeout)
+{
+#define QP_ACK_TIMEOUT_MAX_HIP08 20
+#define QP_ACK_TIMEOUT_OFFSET 10
+#define QP_ACK_TIMEOUT_MAX 31
+
+	if (hr_dev->pci_dev->revision == PCI_REVISION_ID_HIP08) {
+		if (*timeout > QP_ACK_TIMEOUT_MAX_HIP08) {
+			ibdev_warn(&hr_dev->ib_dev,
+				   "Local ACK timeout shall be 0 to 20.\n");
+			return false;
+		}
+		*timeout += QP_ACK_TIMEOUT_OFFSET;
+	} else if (hr_dev->pci_dev->revision > PCI_REVISION_ID_HIP08) {
+		if (*timeout > QP_ACK_TIMEOUT_MAX) {
+			ibdev_warn(&hr_dev->ib_dev,
+				   "Local ACK timeout shall be 0 to 31.\n");
+			return false;
+		}
+	}
+
+	return true;
+}
+
 static int hns_roce_v2_set_opt_fields(struct ib_qp *ibqp,
 				      const struct ib_qp_attr *attr,
 				      int attr_mask,
@@ -4814,6 +4838,7 @@ static int hns_roce_v2_set_opt_fields(struct ib_qp *ibqp,
 	struct hns_roce_dev *hr_dev = to_hr_dev(ibqp->device);
 	struct hns_roce_qp *hr_qp = to_hr_qp(ibqp);
 	int ret = 0;
+	u8 timeout;
 
 	if (attr_mask & IB_QP_AV) {
 		ret = hns_roce_v2_set_path(ibqp, attr, attr_mask, context,
@@ -4823,12 +4848,10 @@ static int hns_roce_v2_set_opt_fields(struct ib_qp *ibqp,
 	}
 
 	if (attr_mask & IB_QP_TIMEOUT) {
-		if (attr->timeout < 31) {
-			hr_reg_write(context, QPC_AT, attr->timeout);
+		timeout = attr->timeout;
+		if (check_qp_timeout_cfg_range(hr_dev, &timeout)) {
+			hr_reg_write(context, QPC_AT, timeout);
 			hr_reg_clear(qpc_mask, QPC_AT);
-		} else {
-			ibdev_warn(&hr_dev->ib_dev,
-				   "Local ACK timeout shall be 0 to 30.\n");
 		}
 	}
 
@@ -4885,7 +4908,9 @@ static int hns_roce_v2_set_opt_fields(struct ib_qp *ibqp,
 		set_access_flags(hr_qp, context, qpc_mask, attr, attr_mask);
 
 	if (attr_mask & IB_QP_MIN_RNR_TIMER) {
-		hr_reg_write(context, QPC_MIN_RNR_TIME, attr->min_rnr_timer);
+		hr_reg_write(context, QPC_MIN_RNR_TIME,
+			    hr_dev->pci_dev->revision == PCI_REVISION_ID_HIP08 ?
+			    HNS_ROCE_RNR_TIMER_10NS : attr->min_rnr_timer);
 		hr_reg_clear(qpc_mask, QPC_MIN_RNR_TIME);
 	}
 
@@ -5502,6 +5527,16 @@ static int hns_roce_v2_modify_cq(struct ib_cq *cq, u16 cq_count, u16 cq_period)
 
 	hr_reg_write(cq_context, CQC_CQ_MAX_CNT, cq_count);
 	hr_reg_clear(cqc_mask, CQC_CQ_MAX_CNT);
+
+	if (hr_dev->pci_dev->revision == PCI_REVISION_ID_HIP08) {
+		if (cq_period * HNS_ROCE_CLOCK_ADJUST > USHRT_MAX) {
+			dev_info(hr_dev->dev,
+				 "cq_period(%u) reached the upper limit, adjusted to 65.\n",
+				 cq_period);
+			cq_period = HNS_ROCE_MAX_CQ_PERIOD;
+		}
+		cq_period *= HNS_ROCE_CLOCK_ADJUST;
+	}
 	hr_reg_write(cq_context, CQC_CQ_PERIOD, cq_period);
 	hr_reg_clear(cqc_mask, CQC_CQ_PERIOD);
 
@@ -5896,6 +5931,15 @@ static int config_eqc(struct hns_roce_dev *hr_dev, struct hns_roce_eq *eq,
 		     to_hr_hw_page_shift(eq->mtr.hem_cfg.buf_pg_shift));
 	hr_reg_write(eqc, EQC_EQ_PROD_INDX, HNS_ROCE_EQ_INIT_PROD_IDX);
 	hr_reg_write(eqc, EQC_EQ_MAX_CNT, eq->eq_max_cnt);
+
+	if (hr_dev->pci_dev->revision == PCI_REVISION_ID_HIP08) {
+		if (eq->eq_period * HNS_ROCE_CLOCK_ADJUST > USHRT_MAX) {
+			dev_info(hr_dev->dev, "eq_period(%u) reached the upper limit, adjusted to 65.\n",
+				 eq->eq_period);
+			eq->eq_period = HNS_ROCE_MAX_EQ_PERIOD;
+		}
+		eq->eq_period *= HNS_ROCE_CLOCK_ADJUST;
+	}
 
 	hr_reg_write(eqc, EQC_EQ_PERIOD, eq->eq_period);
 	hr_reg_write(eqc, EQC_EQE_REPORT_TIMER, HNS_ROCE_EQ_INIT_REPORT_TIMER);
@@ -6347,7 +6391,7 @@ static int hns_roce_hw_v2_init_instance(struct hnae3_handle *handle)
 	if (!id)
 		return 0;
 
-	if (id->driver_data && handle->pdev->revision < PCI_REVISION_ID_HIP09)
+	if (id->driver_data && handle->pdev->revision == PCI_REVISION_ID_HIP08)
 		return 0;
 
 	ret = __hns_roce_hw_v2_init_instance(handle);

@@ -2,7 +2,7 @@
 VERSION = 5
 PATCHLEVEL = 16
 SUBLEVEL = 0
-EXTRAVERSION = -rc5
+EXTRAVERSION =
 NAME = Gobble Gobble
 
 # *DOCUMENTATION*
@@ -276,7 +276,7 @@ no-dot-config-targets := $(clean-targets) \
 			 cscope gtags TAGS tags help% %docs check% coccicheck \
 			 $(version_h) headers headers_% archheaders archscripts \
 			 %asm-generic kernelversion %src-pkg dt_binding_check \
-			 outputmakefile rustfmt rustfmtcheck
+			 outputmakefile rustavailable rustfmt rustfmtcheck
 # Installation targets should not require compiler. Unfortunately, vdso_install
 # is an exception where build artifacts may be updated. This must be fixed.
 no-compiler-targets := $(no-dot-config-targets) install dtbs_install \
@@ -800,7 +800,7 @@ KBUILD_CFLAGS += -O3
 KBUILD_RUSTFLAGS_OPT_LEVEL_MAP := 3
 else ifdef CONFIG_CC_OPTIMIZE_FOR_SIZE
 KBUILD_CFLAGS += -Os
-KBUILD_RUSTFLAGS_OPT_LEVEL_MAP := z
+KBUILD_RUSTFLAGS_OPT_LEVEL_MAP := s
 endif
 
 # Always set `debug-assertions` and `overflow-checks` because their default
@@ -1158,6 +1158,7 @@ export MODULES_NSDEPS := $(extmod_prefix)modules.nsdeps
 ifeq ($(KBUILD_EXTMOD),)
 core-y			+= kernel/ certs/ mm/ fs/ ipc/ security/ crypto/
 core-$(CONFIG_BLOCK)	+= block/
+core-$(CONFIG_RUST)	+= rust/
 
 # Keep this one as an `ifdef` block since its `Makefile` runs `rustc`.
 ifdef CONFIG_RUST
@@ -1265,6 +1266,7 @@ prepare0: archprepare
 	$(Q)$(MAKE) $(build)=scripts/mod
 	$(Q)$(MAKE) $(build)=.
 ifdef CONFIG_RUST
+	$(Q)$(CONFIG_SHELL) $(srctree)/scripts/rust-is-available.sh -v
 	$(Q)$(MAKE) $(build)=rust
 endif
 
@@ -1355,15 +1357,6 @@ headers: $(version_h) scripts_unifdef uapi-asm-generic archheaders archscripts
 	  $(error Headers not exportable for the $(SRCARCH) architecture))
 	$(Q)$(MAKE) $(hdr-inst)=include/uapi
 	$(Q)$(MAKE) $(hdr-inst)=arch/$(SRCARCH)/include/uapi
-
-# Deprecated. It is no-op now.
-PHONY += headers_check
-headers_check:
-	@echo >&2 "=================== WARNING ==================="
-	@echo >&2 "Since Linux 5.5, 'make headers_check' is no-op,"
-	@echo >&2 "and will be removed after Linux 5.15 release."
-	@echo >&2 "Please remove headers_check from your scripts."
-	@echo >&2 "==============================================="
 
 ifdef CONFIG_HEADERS_INSTALL
 prepare: headers
@@ -1575,11 +1568,11 @@ MRPROPER_FILES += include/config include/generated          \
 		  debian snap tar-install \
 		  .config .config.old .version \
 		  Module.symvers \
-		  certs/signing_key.pem certs/signing_key.x509 \
+		  certs/signing_key.pem \
 		  certs/x509.genkey \
 		  vmlinux-gdb.py \
 		  *.spec \
-		  rust/*_generated.h rust/*_generated.rs rust/libmacros.so
+		  rust/libmacros.so
 
 # clean - Delete most, but leave enough to build external modules
 #
@@ -1604,6 +1597,9 @@ $(mrproper-dirs):
 
 mrproper: clean $(mrproper-dirs)
 	$(call cmd,rmfiles)
+	@find . $(RCS_FIND_IGNORE) \
+		\( -name '*.rmeta' \) \
+		-type f -print | xargs rm -f
 
 # distclean
 #
@@ -1692,6 +1688,8 @@ help:
 	@echo  '		      kselftest to existing .config.'
 	@echo  ''
 	@echo  'Rust targets:'
+	@echo  '  rustavailable   - Checks whether the Rust toolchain is'
+	@echo  '		    available and, if not, explains why.'
 	@echo  '  rustfmt	  - Reformat all the Rust code in the kernel'
 	@echo  '  rustfmtcheck	  - Checks if all the Rust code in the kernel'
 	@echo  '		    is formatted, printing a diff otherwise.'
@@ -1777,6 +1775,11 @@ $(DOC_TARGETS):
 # Rust targets
 # ---------------------------------------------------------------------------
 
+# "Is Rust available?" target
+PHONY += rustavailable
+rustavailable:
+	$(Q)$(CONFIG_SHELL) $(srctree)/scripts/rust-is-available.sh -v && echo >&2 "Rust is available!"
+
 # Documentation target
 #
 # Using the singular to avoid running afoul of `no-dot-config-targets`.
@@ -1854,9 +1857,9 @@ PHONY += prepare
 # now expand this into a simple variable to reduce the cost of shell evaluations
 prepare: CC_VERSION_TEXT := $(CC_VERSION_TEXT)
 prepare:
-	@if [ "$(CC_VERSION_TEXT)" != $(CONFIG_CC_VERSION_TEXT) ]; then \
+	@if [ "$(CC_VERSION_TEXT)" != "$(CONFIG_CC_VERSION_TEXT)" ]; then \
 		echo >&2 "warning: the compiler differs from the one used to build the kernel"; \
-		echo >&2 "  The kernel was built by: "$(CONFIG_CC_VERSION_TEXT); \
+		echo >&2 "  The kernel was built by: $(CONFIG_CC_VERSION_TEXT)"; \
 		echo >&2 "  You are using:           $(CC_VERSION_TEXT)"; \
 	fi
 

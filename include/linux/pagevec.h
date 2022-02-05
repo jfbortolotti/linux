@@ -18,6 +18,7 @@ struct page;
 struct folio;
 struct address_space;
 
+/* Layout must match folio_batch */
 struct pagevec {
 	unsigned char nr;
 	bool percpu_pvec_drained;
@@ -85,16 +86,21 @@ static inline void pagevec_release(struct pagevec *pvec)
  * struct folio_batch - A collection of folios.
  *
  * The folio_batch is used to amortise the cost of retrieving and
- * operating on a set of folios.  The order of folios in the batch is
- * not considered important.  Some users of the folio_batch store
- * "exceptional" entries in it which can be removed by calling
- * folio_batch_remove_exceptionals().
+ * operating on a set of folios.  The order of folios in the batch may be
+ * significant (eg delete_from_page_cache_batch()).  Some users of the
+ * folio_batch store "exceptional" entries in it which can be removed
+ * by calling folio_batch_remove_exceptionals().
  */
 struct folio_batch {
 	unsigned char nr;
-	unsigned char aux[3];
+	bool percpu_pvec_drained;
 	struct folio *folios[PAGEVEC_SIZE];
 };
+
+/* Layout must match pagevec */
+static_assert(sizeof(struct pagevec) == sizeof(struct folio_batch));
+static_assert(offsetof(struct pagevec, pages) ==
+		offsetof(struct folio_batch, folios));
 
 /**
  * folio_batch_init() - Initialise a batch of folios
@@ -105,6 +111,7 @@ struct folio_batch {
 static inline void folio_batch_init(struct folio_batch *fbatch)
 {
 	fbatch->nr = 0;
+	fbatch->percpu_pvec_drained = false;
 }
 
 static inline unsigned int folio_batch_count(struct folio_batch *fbatch)

@@ -101,6 +101,7 @@ struct vdpa_dev_set_config {
 	struct {
 		u8 mac[ETH_ALEN];
 		u16 mtu;
+		u16 max_vq_pairs;
 	} net;
 	u64 mask;
 };
@@ -171,14 +172,17 @@ struct vdpa_map_file {
  *				for the device
  *				@vdev: vdpa device
  *				Returns virtqueue algin requirement
- * @get_features:		Get virtio features supported by the device
+ * @get_device_features:	Get virtio features supported by the device
  *				@vdev: vdpa device
  *				Returns the virtio features support by the
  *				device
- * @set_features:		Set virtio features supported by the driver
+ * @set_driver_features:	Set virtio features supported by the driver
  *				@vdev: vdpa device
  *				@features: feature support by the driver
  *				Returns integer: success (0) or error (< 0)
+ * @get_driver_features:	Get the virtio driver features in action
+ *				@vdev: vdpa device
+ *				Returns the virtio features accepted
  * @set_config_cb:		Set the config interrupt callback
  *				@vdev: vdpa device
  *				@cb: virtio-vdev interrupt callback structure
@@ -278,8 +282,9 @@ struct vdpa_config_ops {
 
 	/* Device ops */
 	u32 (*get_vq_align)(struct vdpa_device *vdev);
-	u64 (*get_features)(struct vdpa_device *vdev);
-	int (*set_features)(struct vdpa_device *vdev, u64 features);
+	u64 (*get_device_features)(struct vdpa_device *vdev);
+	int (*set_driver_features)(struct vdpa_device *vdev, u64 features);
+	u64 (*get_driver_features)(struct vdpa_device *vdev);
 	void (*set_config_cb)(struct vdpa_device *vdev,
 			      struct vdpa_callback *cb);
 	u16 (*get_vq_num_max)(struct vdpa_device *vdev);
@@ -387,23 +392,37 @@ static inline struct device *vdpa_get_dma_dev(struct vdpa_device *vdev)
 static inline int vdpa_reset(struct vdpa_device *vdev)
 {
 	const struct vdpa_config_ops *ops = vdev->config;
+	int ret;
 
+	mutex_lock(&vdev->cf_mutex);
 	vdev->features_valid = false;
-	return ops->reset(vdev);
+	ret = ops->reset(vdev);
+	mutex_unlock(&vdev->cf_mutex);
+	return ret;
 }
 
-static inline int vdpa_set_features(struct vdpa_device *vdev, u64 features)
+static inline int vdpa_set_features(struct vdpa_device *vdev, u64 features, bool locked)
 {
 	const struct vdpa_config_ops *ops = vdev->config;
+	int ret;
+
+	if (!locked)
+		mutex_lock(&vdev->cf_mutex);
 
 	vdev->features_valid = true;
-	return ops->set_features(vdev, features);
+	ret = ops->set_driver_features(vdev, features);
+	if (!locked)
+		mutex_unlock(&vdev->cf_mutex);
+
+	return ret;
 }
 
 void vdpa_get_config(struct vdpa_device *vdev, unsigned int offset,
 		     void *buf, unsigned int len);
 void vdpa_set_config(struct vdpa_device *dev, unsigned int offset,
 		     const void *buf, unsigned int length);
+void vdpa_set_status(struct vdpa_device *vdev, u8 status);
+
 /**
  * struct vdpa_mgmtdev_ops - vdpa device ops
  * @dev_add: Add a vdpa device using alloc and register
@@ -440,6 +459,8 @@ struct vdpa_mgmt_dev {
 	const struct virtio_device_id *id_table;
 	u64 config_attr_mask;
 	struct list_head list;
+	u64 supported_features;
+	u32 max_supported_vqs;
 };
 
 int vdpa_mgmtdev_register(struct vdpa_mgmt_dev *mdev);

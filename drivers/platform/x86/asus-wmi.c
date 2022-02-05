@@ -13,29 +13,29 @@
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
-#include <linux/kernel.h>
-#include <linux/module.h>
-#include <linux/init.h>
-#include <linux/types.h>
-#include <linux/slab.h>
-#include <linux/input.h>
-#include <linux/input/sparse-keymap.h>
-#include <linux/fb.h>
+#include <linux/acpi.h>
 #include <linux/backlight.h>
-#include <linux/leds.h>
-#include <linux/rfkill.h>
-#include <linux/pci.h>
-#include <linux/pci_hotplug.h>
-#include <linux/platform_profile.h>
-#include <linux/power_supply.h>
+#include <linux/debugfs.h>
+#include <linux/dmi.h>
+#include <linux/fb.h>
 #include <linux/hwmon.h>
 #include <linux/hwmon-sysfs.h>
-#include <linux/debugfs.h>
-#include <linux/seq_file.h>
+#include <linux/init.h>
+#include <linux/input.h>
+#include <linux/input/sparse-keymap.h>
+#include <linux/kernel.h>
+#include <linux/leds.h>
+#include <linux/module.h>
+#include <linux/pci.h>
+#include <linux/pci_hotplug.h>
 #include <linux/platform_data/x86/asus-wmi.h>
 #include <linux/platform_device.h>
-#include <linux/acpi.h>
-#include <linux/dmi.h>
+#include <linux/platform_profile.h>
+#include <linux/power_supply.h>
+#include <linux/rfkill.h>
+#include <linux/seq_file.h>
+#include <linux/slab.h>
+#include <linux/types.h>
 #include <linux/units.h>
 
 #include <acpi/battery.h>
@@ -43,8 +43,8 @@
 
 #include "asus-wmi.h"
 
-MODULE_AUTHOR("Corentin Chary <corentin.chary@gmail.com>, "
-	      "Yong Wang <yong.y.wang@intel.com>");
+MODULE_AUTHOR("Corentin Chary <corentin.chary@gmail.com>");
+MODULE_AUTHOR("Yong Wang <yong.y.wang@intel.com>");
 MODULE_DESCRIPTION("Asus Generic WMI Driver");
 MODULE_LICENSE("GPL");
 
@@ -1154,12 +1154,10 @@ static void asus_rfkill_hotplug(struct asus_wmi *asus)
 		absent = (l == 0xffffffff);
 
 		if (blocked != absent) {
-			pr_warn("BIOS says wireless lan is %s, "
-				"but the pci device is %s\n",
+			pr_warn("BIOS says wireless lan is %s, but the pci device is %s\n",
 				blocked ? "blocked" : "unblocked",
 				absent ? "absent" : "present");
-			pr_warn("skipped wireless hotplug as probably "
-				"inappropriate for this model\n");
+			pr_warn("skipped wireless hotplug as probably inappropriate for this model\n");
 			goto out_unlock;
 		}
 

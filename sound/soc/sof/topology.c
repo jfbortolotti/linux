@@ -1090,11 +1090,11 @@ static int sof_control_load_volume(struct snd_soc_component *scomp,
 
 	/* set cmd for mixer control */
 	if (le32_to_cpu(mc->max) == 1) {
-		scontrol->cmd = SOF_CTRL_CMD_SWITCH;
+		scontrol->control_data->cmd = SOF_CTRL_CMD_SWITCH;
 		goto skip;
 	}
 
-	scontrol->cmd = SOF_CTRL_CMD_VOLUME;
+	scontrol->control_data->cmd = SOF_CTRL_CMD_VOLUME;
 
 	/* extract tlv data */
 	if (!kc->tlv.p || get_tlv_data(kc->tlv.p, tlv) < 0) {
@@ -1165,7 +1165,7 @@ static int sof_control_load_enum(struct snd_soc_component *scomp,
 	scontrol->comp_id = sdev->next_comp_id;
 	scontrol->num_channels = le32_to_cpu(ec->num_channels);
 	scontrol->control_data->index = kc->index;
-	scontrol->cmd = SOF_CTRL_CMD_ENUM;
+	scontrol->control_data->cmd = SOF_CTRL_CMD_ENUM;
 
 	dev_dbg(scomp->dev, "tplg: load kcontrol index %d chans %d comp_id %d\n",
 		scontrol->comp_id, scontrol->num_channels, scontrol->comp_id);
@@ -1211,7 +1211,7 @@ static int sof_control_load_bytes(struct snd_soc_component *scomp,
 	}
 
 	scontrol->comp_id = sdev->next_comp_id;
-	scontrol->cmd = SOF_CTRL_CMD_BINARY;
+	scontrol->control_data->cmd = SOF_CTRL_CMD_BINARY;
 	scontrol->control_data->index = kc->index;
 
 	dev_dbg(scomp->dev, "tplg: load kcontrol index %d chans %d\n",
@@ -1695,12 +1695,12 @@ static int sof_widget_load_pipeline(struct snd_soc_component *scomp, int index,
 		goto err;
 	}
 
-	if (sof_core_debug & SOF_DBG_DISABLE_MULTICORE)
+	if (sof_debug_check_flag(SOF_DBG_DISABLE_MULTICORE))
 		pipeline->core = SOF_DSP_PRIMARY_CORE;
 
-	if (sof_core_debug & SOF_DBG_DYNAMIC_PIPELINES_OVERRIDE)
-		swidget->dynamic_pipeline_widget = sof_core_debug &
-			SOF_DBG_DYNAMIC_PIPELINES_ENABLE;
+	if (sof_debug_check_flag(SOF_DBG_DYNAMIC_PIPELINES_OVERRIDE))
+		swidget->dynamic_pipeline_widget =
+			sof_debug_check_flag(SOF_DBG_DYNAMIC_PIPELINES_ENABLE);
 
 	dev_dbg(scomp->dev, "pipeline %s: period %d pri %d mips %d core %d frames %d dynamic %d\n",
 		swidget->widget->name, pipeline->period, pipeline->priority,
@@ -2076,7 +2076,7 @@ static int sof_get_control_data(struct snd_soc_component *scomp,
 		*size += wdata[i].pdata->size;
 
 		/* get data type */
-		switch (wdata[i].control->cmd) {
+		switch (wdata[i].control->control_data->cmd) {
 		case SOF_CTRL_CMD_VOLUME:
 		case SOF_CTRL_CMD_ENUM:
 		case SOF_CTRL_CMD_SWITCH:
@@ -2295,7 +2295,7 @@ static int sof_widget_ready(struct snd_soc_component *scomp, int index,
 		return ret;
 	}
 
-	if (sof_core_debug & SOF_DBG_DISABLE_MULTICORE)
+	if (sof_debug_check_flag(SOF_DBG_DISABLE_MULTICORE))
 		comp.core = SOF_DSP_PRIMARY_CORE;
 
 	swidget->core = comp.core;
@@ -3542,7 +3542,7 @@ static int sof_complete(struct snd_soc_component *scomp)
 	}
 
 	/* verify topology components loading including dynamic pipelines */
-	if (sof_core_debug & SOF_DBG_VERIFY_TPLG) {
+	if (sof_debug_check_flag(SOF_DBG_VERIFY_TPLG)) {
 		ret = sof_set_up_pipelines(sdev, true);
 		if (ret < 0) {
 			dev_err(sdev->dev, "error: topology verification failed %d\n", ret);

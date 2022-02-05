@@ -617,7 +617,7 @@ static void flush_space(struct btrfs_fs_info *fs_info,
 		       struct btrfs_space_info *space_info, u64 num_bytes,
 		       enum btrfs_flush_state state, bool for_preempt)
 {
-	struct btrfs_root *root = fs_info->extent_root;
+	struct btrfs_root *root = fs_info->tree_root;
 	struct btrfs_trans_handle *trans;
 	int nr;
 	int ret = 0;
@@ -902,8 +902,7 @@ static bool maybe_fail_all_tickets(struct btrfs_fs_info *fs_info,
 		ticket = list_first_entry(&space_info->tickets,
 					  struct reserve_ticket, list);
 
-		if (!aborted && steal_from_global_rsv(fs_info, space_info,
-						      ticket))
+		if (!aborted && steal_from_global_rsv(fs_info, space_info, ticket))
 			return true;
 
 		if (!aborted && btrfs_test_opt(fs_info, ENOSPC_DEBUG))
@@ -1267,7 +1266,13 @@ static void priority_reclaim_metadata_space(struct btrfs_fs_info *fs_info,
 
 	spin_lock(&space_info->lock);
 	to_reclaim = btrfs_calc_reclaim_metadata_size(fs_info, space_info);
-	if (!to_reclaim || ticket->bytes == 0) {
+	/*
+	 * This is the priority reclaim path, so to_reclaim could be >0 still
+	 * because we may have only satisified the priority tickets and still
+	 * left non priority tickets on the list.  We would then have
+	 * to_reclaim but ->bytes == 0.
+	 */
+	if (ticket->bytes == 0) {
 		spin_unlock(&space_info->lock);
 		return;
 	}
@@ -1583,7 +1588,7 @@ static int __reserve_bytes(struct btrfs_fs_info *fs_info,
 /**
  * Trye to reserve metadata bytes from the block_rsv's space
  *
- * @root:       the root we're allocating for
+ * @fs_info:    the filesystem
  * @block_rsv:  block_rsv we're allocating for
  * @orig_bytes: number of bytes we want
  * @flush:      whether or not we can flush to make our reservation

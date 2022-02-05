@@ -35,6 +35,8 @@ The cache backend and the network filesystem can both ask for cache cookies -
 and if they ask for one of the same name, they'll get the same cookie.  Volume
 and data cookies, however, are created at the behest of the filesystem only.
 
+The cache must then go through the data storage objects it has and tell fscache
+to withdraw them, calling::
 
 Cache Cookies
 =============
@@ -91,6 +93,8 @@ This stores the cache operations table pointer and cache private data into the
 cache cookie and moves the cache to the active state, thereby allowing accesses
 to take place.
 
+Data Storage Cookies
+====================
 
 Withdrawing a Cache From Service
 ================================
@@ -142,8 +146,9 @@ These are represented in the API as objects of type::
 		unsigned int			debug_id;
 		char				*key;
 		unsigned int			key_hash;
-		u64				coherency;
 		...
+		u8				coherency_len;
+		u8				coherency[];
 	};
 
 There are a number of fields here that are of interest to the caching backend:
@@ -164,6 +169,10 @@ There are a number of fields here that are of interest to the caching backend:
    * ``coherency`` - A piece of coherency data that should be checked when the
      volume is bound to in the cache.
 
+   * ``coherency_len`` - The amount of data in the coherency buffer.
+
+The index key is a binary blob, the storage for which is padded out to a
+multiple of 4 bytes.
 
 Data Storage Cookies
 ====================

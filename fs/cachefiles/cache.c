@@ -118,7 +118,7 @@ int cachefiles_add_cache(struct cachefiles_cache *cache)
 	       (unsigned long long) cache->bstop);
 
 	/* get the cache directory and check its type */
-	cachedir = cachefiles_get_directory(cache, root, "cache");
+	cachedir = cachefiles_get_directory(cache, root, "cache", NULL);
 	if (IS_ERR(cachedir)) {
 		ret = PTR_ERR(cachedir);
 		goto error_unsupported;
@@ -127,7 +127,7 @@ int cachefiles_add_cache(struct cachefiles_cache *cache)
 	cache->store = cachedir;
 
 	/* get the graveyard directory */
-	graveyard = cachefiles_get_directory(cache, root, "graveyard");
+	graveyard = cachefiles_get_directory(cache, root, "graveyard", NULL);
 	if (IS_ERR(graveyard)) {
 		ret = PTR_ERR(graveyard);
 		goto error_unsupported;

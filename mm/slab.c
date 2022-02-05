@@ -1404,8 +1404,7 @@ static void kmem_freepages(struct kmem_cache *cachep, struct slab *slab)
 	__slab_clear_pfmemalloc(slab);
 	__folio_clear_slab(folio);
 	page_mapcount_reset(folio_page(folio, 0));
-	/* In union with page->mapping where page allocator expects NULL */
-	slab->slab_cache = NULL;
+	folio->mapping = NULL;
 
 	if (current->reclaim_state)
 		current->reclaim_state->reclaimed_slab += 1 << order;

@@ -593,7 +593,7 @@ static int virtio_mem_sbm_sb_states_prepare_next_mb(struct virtio_mem *vm)
 		return -ENOMEM;
 
 	mutex_lock(&vm->hotplug_mutex);
-	if (new_bitmap)
+	if (vm->sbm.sb_states)
 		memcpy(new_bitmap, vm->sbm.sb_states, old_pages * PAGE_SIZE);
 
 	old_bitmap = vm->sbm.sb_states;
@@ -2888,6 +2888,8 @@ static void virtio_mem_remove(struct virtio_device *vdev)
 		virtio_mem_deinit_hotplug(vm);
 
 	/* reset the device and cleanup the queues */
+	virtio_break_device(vdev);
+	flush_work(&vm->wq);
 	virtio_reset_device(vdev);
 	vdev->config->del_vqs(vdev);
 

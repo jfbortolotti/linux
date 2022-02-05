@@ -545,13 +545,13 @@ bool slab_is_available(void)
  */
 bool kmem_valid_obj(void *object)
 {
-	struct page *page;
+	struct folio *folio;
 
 	/* Some arches consider ZERO_SIZE_PTR to be a valid address. */
 	if (object < (void *)PAGE_SIZE || !virt_addr_valid(object))
 		return false;
-	page = virt_to_head_page(object);
-	return PageSlab(page);
+	folio = virt_to_folio(object);
+	return folio_test_slab(folio);
 }
 EXPORT_SYMBOL_GPL(kmem_valid_obj);
 

@@ -1082,7 +1082,8 @@ static u32 ufshcd_pending_cmds(struct ufs_hba *hba)
 	struct scsi_device *sdev;
 	u32 pending = 0;
 
-	shost_for_each_device(sdev, hba->host)
+	lockdep_assert_held(hba->host->host_lock);
+	__shost_for_each_device(sdev, hba->host)
 		pending += sbitmap_weight(&sdev->budget_map);
 
 	return pending;
@@ -7814,7 +7815,7 @@ static int ufshcd_quirk_tune_host_pa_tactivate(struct ufs_hba *hba)
 	peer_pa_tactivate_us = peer_pa_tactivate *
 			     gran_to_us_table[peer_granularity - 1];
 
-	if (pa_tactivate_us > peer_pa_tactivate_us) {
+	if (pa_tactivate_us >= peer_pa_tactivate_us) {
 		u32 new_peer_pa_tactivate;
 
 		new_peer_pa_tactivate = pa_tactivate_us /

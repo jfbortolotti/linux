@@ -145,6 +145,7 @@ Hardware Monitoring Kernel Drivers
    mlxreg-fan
    mp2888
    mp2975
+   mp5023
    nct6683
    nct6775
    nct7802
@@ -153,6 +154,7 @@ Hardware Monitoring Kernel Drivers
    nsa320
    ntc_thermistor
    nzxt-kraken2
+   nzxt-smart2
    occ
    pc87360
    pc87427

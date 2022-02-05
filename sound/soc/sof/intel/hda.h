@@ -273,7 +273,7 @@
 #define BXT_D0I3_DELAY 5000
 
 #define FW_CL_STREAM_NUMBER		0x1
-#define HDA_FW_BOOT_ATTEMPTS	3
+#define HDA_FW_BOOT_ATTEMPTS		3
 
 /* ADSPCS - Audio DSP Control & Status */
 
@@ -728,8 +728,8 @@ extern const struct sof_intel_dsp_desc jsl_chip_info;
 extern const struct sof_intel_dsp_desc adls_chip_info;
 
 /* machine driver select */
-void hda_machine_select(struct snd_sof_dev *sdev);
-void hda_set_mach_params(const struct snd_soc_acpi_mach *mach,
+struct snd_soc_acpi_mach *hda_machine_select(struct snd_sof_dev *sdev);
+void hda_set_mach_params(struct snd_soc_acpi_mach *mach,
 			 struct snd_sof_dev *sdev);
 
 /* PCI driver selection and probe */

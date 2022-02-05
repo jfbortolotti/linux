@@ -27,7 +27,7 @@
  * APPLE_WDT_WDx_CUR_TIME is a simple counter incremented for each tick of the
  * reference clock. It can also be overwritten to any value.
  * Whenever APPLE_WDT_CTRL_RESET_EN is set in APPLE_WDT_WDx_CTRL and
- * APPLE_WDTx_WD1_CUR_TIME >= APPLE_WDTx_WD1_BITE_TIME the entire machine is
+ * APPLE_WDT_WDx_CUR_TIME >= APPLE_WDT_WDx_BITE_TIME the entire machine is
  * reset.
  * Whenever APPLE_WDT_CTRL_IRQ_EN is set and APPLE_WDTx_WD1_CUR_TIME >=
  * APPLE_WDTx_WD1_BARK_TIME an interrupt is triggered and

@@ -47,7 +47,7 @@ struct aux_payload;
 struct set_config_cmd_payload;
 struct dmub_notification;
 
-#define DC_VER "3.2.164"
+#define DC_VER "3.2.167"
 
 #define MAX_SURFACES 3
 #define MAX_PLANES 6
@@ -691,6 +691,7 @@ struct dc_debug_options {
 	/* TODO - remove once tested */
 	bool legacy_dp2_lt;
 	bool set_mst_en_for_sst;
+	bool disable_uhbr;
 	bool force_dp2_lt_fallback_method;
 #endif
 	union mem_low_power_enable_options enable_mem_low_power;
@@ -1431,6 +1432,9 @@ void dc_unlock_memory_clock_frequency(struct dc *dc);
  * max to maxDPM, and unblank streams
  */
 void dc_lock_memory_clock_frequency(struct dc *dc);
+
+/* set soft max for memclk, to be used for AC/DC switching clock limitations */
+void dc_enable_dcmode_clk_limit(struct dc *dc, bool enable);
 
 /* cleanup on driver unload */
 void dc_hardware_release(struct dc *dc);

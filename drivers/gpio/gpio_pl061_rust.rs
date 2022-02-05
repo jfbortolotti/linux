@@ -8,7 +8,7 @@
 #![feature(global_asm, allocator_api)]
 
 use kernel::{
-    amba, bit, bits_iter, declare_amba_id_table, device, gpio,
+    amba, bit, bits_iter, define_amba_id_table, device, gpio,
     io_mem::IoMem,
     irq::{self, ExtraResult, IrqData, LockedIrqData},
     power,
@@ -223,7 +223,7 @@ impl irq::Chip for PL061Device {
     }
 
     fn mask(data: RefBorrow<'_, DeviceData>, irq_data: &IrqData) {
-        let mask = bit(irq_data.hwirq() % u64::from(PL061_GPIO_NR));
+        let mask = bit(irq_data.hwirq() % irq::HwNumber::from(PL061_GPIO_NR));
         let _guard = data.lock();
         if let Some(pl061) = data.resources() {
             let gpioie = pl061.base.readb(GPIOIE) & !mask;
@@ -232,7 +232,7 @@ impl irq::Chip for PL061Device {
     }
 
     fn unmask(data: RefBorrow<'_, DeviceData>, irq_data: &IrqData) {
-        let mask = bit(irq_data.hwirq() % u64::from(PL061_GPIO_NR));
+        let mask = bit(irq_data.hwirq() % irq::HwNumber::from(PL061_GPIO_NR));
         let _guard = data.lock();
         if let Some(pl061) = data.resources() {
             let gpioie = pl061.base.readb(GPIOIE) | mask;
@@ -244,7 +244,7 @@ impl irq::Chip for PL061Device {
     // (interrupt-clear) register. For level IRQs this is not needed: these go away when the level
     // signal goes away.
     fn ack(data: RefBorrow<'_, DeviceData>, irq_data: &IrqData) {
-        let mask = bit(irq_data.hwirq() % u64::from(PL061_GPIO_NR));
+        let mask = bit(irq_data.hwirq() % irq::HwNumber::from(PL061_GPIO_NR));
         let _guard = data.lock();
         if let Some(pl061) = data.resources() {
             pl061.base.writeb(mask.into(), GPIOIC);
@@ -261,11 +261,11 @@ impl amba::Driver for PL061Device {
     type Data = Ref<DeviceData>;
     type PowerOps = Self;
 
-    declare_amba_id_table! [
-        { id: 0x00041061, mask: 0x000fffff, data: () },
-    ];
+    define_amba_id_table! {(), [
+        ({id: 0x00041061, mask: 0x000fffff}, None),
+    ]}
 
-    fn probe(dev: &mut amba::Device, _id: &amba::DeviceId) -> Result<Ref<DeviceData>> {
+    fn probe(dev: &mut amba::Device, _data: Option<&Self::IdInfo>) -> Result<Ref<DeviceData>> {
         let res = dev.take_resource().ok_or(Error::ENXIO)?;
         let irq = dev.irq(0).ok_or(Error::ENXIO)?;
 

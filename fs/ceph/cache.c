@@ -94,7 +94,7 @@ int ceph_fscache_register_fs(struct ceph_fs_client* fsc, struct fs_context *fc)
 	if (!name)
 		return -ENOMEM;
 
-	fsc->fscache = fscache_acquire_volume(name, NULL, 0);
+	fsc->fscache = fscache_acquire_volume(name, NULL, NULL, 0);
 	if (IS_ERR_OR_NULL(fsc->fscache)) {
 		errorfc(fc, "Unable to register fscache cookie for %s", name);
 		err = fsc->fscache ? PTR_ERR(fsc->fscache) : -EOPNOTSUPP;
@@ -106,5 +106,5 @@ int ceph_fscache_register_fs(struct ceph_fs_client* fsc, struct fs_context *fc)
 
 void ceph_fscache_unregister_fs(struct ceph_fs_client* fsc)
 {
-	fscache_relinquish_volume(fsc->fscache, 0, false);
+	fscache_relinquish_volume(fsc->fscache, NULL, false);
 }

@@ -264,12 +264,14 @@ dtb-$(CONFIG_ARCH_IXP4XX) += \
 	intel-ixp46x-ixdp465.dtb \
 	intel-ixp42x-adi-coyote.dtb \
 	intel-ixp42x-ixdpg425.dtb \
+	intel-ixp42x-goramo-multilink.dtb \
 	intel-ixp42x-iomega-nas100d.dtb \
 	intel-ixp42x-dlink-dsm-g600.dtb \
 	intel-ixp42x-gateworks-gw2348.dtb \
 	intel-ixp43x-gateworks-gw2358.dtb \
 	intel-ixp42x-netgear-wg302v2.dtb \
-	intel-ixp42x-arcom-vulcan.dtb
+	intel-ixp42x-arcom-vulcan.dtb \
+	intel-ixp42x-gateway-7001.dtb
 dtb-$(CONFIG_ARCH_KEYSTONE) += \
 	keystone-k2hk-evm.dtb \
 	keystone-k2l-evm.dtb \
@@ -702,7 +704,8 @@ dtb-$(CONFIG_SOC_IMX6UL) += \
 	imx6ull-phytec-segin-ff-rdk-nand.dtb \
 	imx6ull-phytec-segin-ff-rdk-emmc.dtb \
 	imx6ull-phytec-segin-lc-rdk-nand.dtb \
-	imx6ulz-14x14-evk.dtb
+	imx6ulz-14x14-evk.dtb \
+	imx6ulz-bsh-smm-m2.dtb
 dtb-$(CONFIG_SOC_IMX7D) += \
 	imx7d-cl-som-imx7.dtb \
 	imx7d-colibri-aster.dtb \
@@ -803,6 +806,7 @@ dtb-$(CONFIG_ARCH_OMAP3) += \
 	logicpd-som-lv-37xx-devkit.dtb \
 	omap3430-sdp.dtb \
 	omap3-beagle.dtb \
+	omap3-beagle-ab4.dtb \
 	omap3-beagle-xm.dtb \
 	omap3-beagle-xm-ab.dtb \
 	omap3-cm-t3517.dtb \
@@ -963,6 +967,7 @@ dtb-$(CONFIG_ARCH_OXNAS) += \
 	ox810se-wd-mbwe.dtb \
 	ox820-cloudengines-pogoplug-series-3.dtb
 dtb-$(CONFIG_ARCH_QCOM) += \
+	qcom-apq8016-sbc.dtb \
 	qcom-apq8026-lg-lenok.dtb \
 	qcom-apq8060-dragonboard.dtb \
 	qcom-apq8064-cm-qs600.dtb \
@@ -995,7 +1000,8 @@ dtb-$(CONFIG_ARCH_QCOM) += \
 	qcom-mdm9615-wp8548-mangoh-green.dtb \
 	qcom-sdx55-mtp.dtb \
 	qcom-sdx55-t55.dtb \
-	qcom-sdx55-telit-fn980-tlb.dtb
+	qcom-sdx55-telit-fn980-tlb.dtb \
+	qcom-sdx65-mtp.dtb
 dtb-$(CONFIG_ARCH_RDA) += \
 	rda8810pl-orangepi-2g-iot.dtb \
 	rda8810pl-orangepi-i96.dtb
@@ -1314,6 +1320,7 @@ dtb-$(CONFIG_MACH_SUNIV) += \
 	suniv-f1c100s-licheepi-nano.dtb
 dtb-$(CONFIG_ARCH_TEGRA_2x_SOC) += \
 	tegra20-acer-a500-picasso.dtb \
+	tegra20-asus-tf101.dtb \
 	tegra20-harmony.dtb \
 	tegra20-colibri-eval-v3.dtb \
 	tegra20-colibri-iris.dtb \
@@ -1330,12 +1337,18 @@ dtb-$(CONFIG_ARCH_TEGRA_3x_SOC) += \
 	tegra30-asus-nexus7-grouper-PM269.dtb \
 	tegra30-asus-nexus7-grouper-E1565.dtb \
 	tegra30-asus-nexus7-tilapia-E1565.dtb \
+	tegra30-asus-tf201.dtb \
+	tegra30-asus-tf300t.dtb \
+	tegra30-asus-tf300tg.dtb \
+	tegra30-asus-tf700t.dtb \
 	tegra30-beaver.dtb \
 	tegra30-cardhu-a02.dtb \
 	tegra30-cardhu-a04.dtb \
 	tegra30-colibri-eval-v3.dtb \
-	tegra30-ouya.dtb
+	tegra30-ouya.dtb \
+	tegra30-pegatron-chagall.dtb
 dtb-$(CONFIG_ARCH_TEGRA_114_SOC) += \
+	tegra114-asus-tf701t.dtb \
 	tegra114-dalmore.dtb \
 	tegra114-roth.dtb \
 	tegra114-tn7.dtb
@@ -1344,6 +1357,7 @@ dtb-$(CONFIG_ARCH_TEGRA_124_SOC) += \
 	tegra124-apalis-v1.2-eval.dtb \
 	tegra124-jetson-tk1.dtb \
 	tegra124-nyan-big.dtb \
+	tegra124-nyan-big-fhd.dtb \
 	tegra124-nyan-blaze.dtb \
 	tegra124-venice2.dtb
 dtb-$(CONFIG_ARCH_U8500) += \
@@ -1493,6 +1507,7 @@ dtb-$(CONFIG_ARCH_ASPEED) += \
 	aspeed-bmc-arm-stardragon4800-rep2.dtb \
 	aspeed-bmc-asrock-e3c246d4i.dtb \
 	aspeed-bmc-bytedance-g220a.dtb \
+	aspeed-bmc-facebook-bletchley.dtb \
 	aspeed-bmc-facebook-cloudripper.dtb \
 	aspeed-bmc-facebook-cmm.dtb \
 	aspeed-bmc-facebook-elbert.dtb \
@@ -1530,4 +1545,8 @@ dtb-$(CONFIG_ARCH_ASPEED) += \
 	aspeed-bmc-quanta-q71l.dtb \
 	aspeed-bmc-supermicro-x11spi.dtb \
 	aspeed-bmc-inventec-transformers.dtb \
-	aspeed-bmc-tyan-s7106.dtb
+	aspeed-bmc-tyan-s7106.dtb \
+	aspeed-bmc-tyan-s8036.dtb \
+	aspeed-bmc-vegman-n110.dtb \
+	aspeed-bmc-vegman-rx20.dtb \
+	aspeed-bmc-vegman-sx20.dtb

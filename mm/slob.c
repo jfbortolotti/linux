@@ -30,7 +30,7 @@
  * If kmalloc is asked for objects of PAGE_SIZE or larger, it calls
  * alloc_pages() directly, allocating compound pages so the page order
  * does not have to be separately tracked.
- * These objects are detected in kfree() because PageSlab()
+ * These objects are detected in kfree() because folio_test_slab()
  * is false for them.
  *
  * SLAB is emulated on top of SLOB by simply calling constructors and
@@ -403,8 +403,7 @@ static void slob_free(void *block, int size)
 		if (slob_page_free(sp))
 			clear_slob_page_free(sp);
 		spin_unlock_irqrestore(&slob_lock, flags);
-		__ClearPageSlab(slab_page(sp));
-		page_mapcount_reset(slab_page(sp));
+		__folio_clear_slab(slab_folio(sp));
 		slob_free_pages(b, 0);
 		return;
 	}
@@ -546,7 +545,7 @@ EXPORT_SYMBOL(__kmalloc_node_track_caller);
 
 void kfree(const void *block)
 {
-	struct page *sp;
+	struct folio *sp;
 
 	trace_kfree(_RET_IP_, block);
 
@@ -554,16 +553,17 @@ void kfree(const void *block)
 		return;
 	kmemleak_free(block);
 
-	sp = virt_to_page(block);
-	if (PageSlab(sp)) {
+	sp = virt_to_folio(block);
+	if (folio_test_slab(sp)) {
 		int align = max_t(size_t, ARCH_KMALLOC_MINALIGN, ARCH_SLAB_MINALIGN);
 		unsigned int *m = (unsigned int *)(block - align);
 		slob_free(m, *m + align);
 	} else {
-		unsigned int order = compound_order(sp);
-		mod_node_page_state(page_pgdat(sp), NR_SLAB_UNRECLAIMABLE_B,
+		unsigned int order = folio_order(sp);
+
+		mod_node_page_state(folio_pgdat(sp), NR_SLAB_UNRECLAIMABLE_B,
 				    -(PAGE_SIZE << order));
-		__free_pages(sp, order);
+		__free_pages(folio_page(sp, 0), order);
 
 	}
 }

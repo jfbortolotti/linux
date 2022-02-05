@@ -720,8 +720,6 @@ static void restore_exclusive_pte(struct vm_area_struct *vma,
 	else if (is_writable_device_exclusive_entry(entry))
 		pte = maybe_mkwrite(pte_mkdirty(pte), vma);
 
-	set_pte_at(vma->vm_mm, address, ptep, pte);
-
 	/*
 	 * No need to take a page reference as one was already
 	 * created when the swap entry was made.
@@ -734,6 +732,8 @@ static void restore_exclusive_pte(struct vm_area_struct *vma,
 		 * memory so the entry shouldn't point to a filebacked page.
 		 */
 		WARN_ON_ONCE(!PageAnon(page));
+
+	set_pte_at(vma->vm_mm, address, ptep, pte);
 
 	if (vma->vm_flags & VM_LOCKED)
 		mlock_vma_page(page);
@@ -1303,6 +1303,28 @@ copy_page_range(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma)
 		mmu_notifier_invalidate_range_end(&range);
 	}
 	return ret;
+}
+
+/*
+ * Parameter block passed down to zap_pte_range in exceptional cases.
+ */
+struct zap_details {
+	struct address_space *zap_mapping;	/* Check page->mapping if set */
+	struct folio *single_folio;	/* Locked folio to be unmapped */
+};
+
+/*
+ * We set details->zap_mapping when we want to unmap shared but keep private
+ * pages. Return true if skip zapping this page, false otherwise.
+ */
+static inline bool
+zap_skip_check_mapping(struct zap_details *details, struct page *page)
+{
+	if (!details || !page)
+		return false;
+
+	return details->zap_mapping &&
+		(details->zap_mapping != page_rmapping(page));
 }
 
 static unsigned long zap_pte_range(struct mmu_gather *tlb,
@@ -3622,7 +3644,7 @@ vm_fault_t do_swap_page(struct vm_fault *vmf)
 	inc_mm_counter_fast(vma->vm_mm, MM_ANONPAGES);
 	dec_mm_counter_fast(vma->vm_mm, MM_SWAPENTS);
 	pte = mk_pte(page, vma->vm_page_prot);
-	if ((vmf->flags & FAULT_FLAG_WRITE) && reuse_swap_page(page, NULL)) {
+	if ((vmf->flags & FAULT_FLAG_WRITE) && reuse_swap_page(page)) {
 		pte = maybe_mkwrite(pte_mkdirty(pte), vma);
 		vmf->flags &= ~FAULT_FLAG_WRITE;
 		ret |= VM_FAULT_WRITE;
@@ -3635,6 +3657,7 @@ vm_fault_t do_swap_page(struct vm_fault *vmf)
 		pte = pte_mkuffd_wp(pte);
 		pte = pte_wrprotect(pte);
 	}
+	vmf->orig_pte = pte;
 
 	/* ksm created a completely new copy */
 	if (unlikely(page != swapcache && swapcache)) {
@@ -3646,7 +3669,6 @@ vm_fault_t do_swap_page(struct vm_fault *vmf)
 
 	set_pte_at(vma->vm_mm, vmf->address, vmf->pte, pte);
 	arch_do_swap_page(vma->vm_mm, vma, vmf->address, pte, vmf->orig_pte);
-	vmf->orig_pte = pte;
 
 	swap_free(entry);
 	if (mem_cgroup_swap_full(page) ||

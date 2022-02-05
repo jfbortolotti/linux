@@ -208,6 +208,7 @@ int v9fs_dir_release(struct inode *inode, struct file *filp)
 {
 	struct v9fs_inode *v9inode = V9FS_I(inode);
 	struct p9_fid *fid;
+	__le32 version;
 	loff_t i_size;
 
 	fid = filp->private_data;
@@ -221,9 +222,10 @@ int v9fs_dir_release(struct inode *inode, struct file *filp)
 	}
 
 	if ((filp->f_mode & FMODE_WRITE)) {
+		version = cpu_to_le32(v9inode->qid.version);
 		i_size = i_size_read(inode);
 		fscache_unuse_cookie(v9fs_inode_cookie(v9inode),
-				     &v9inode->qid.version, &i_size);
+				     &version, &i_size);
 	} else {
 		fscache_unuse_cookie(v9fs_inode_cookie(v9inode), NULL, NULL);
 	}

@@ -2021,8 +2021,7 @@ static void __free_slab(struct kmem_cache *s, struct slab *slab)
 
 	__slab_clear_pfmemalloc(slab);
 	__folio_clear_slab(folio);
-	/* In union with page->mapping where page allocator expects NULL */
-	slab->slab_cache = NULL;
+	folio->mapping = NULL;
 	if (current->reclaim_state)
 		current->reclaim_state->reclaimed_slab += pages;
 	unaccount_slab(slab, order, s);
@@ -3536,16 +3535,17 @@ struct detached_freelist {
 	struct kmem_cache *s;
 };
 
-static inline void free_nonslab_page(struct page *page, void *object)
+static inline void free_large_kmalloc(struct folio *folio, void *object)
 {
-	unsigned int order = compound_order(page);
+	unsigned int order = folio_order(folio);
 
-	if (WARN_ON_ONCE(!PageCompound(page)))
+	if (WARN_ON_ONCE(order == 0))
 		pr_warn_once("object pointer: 0x%p\n", object);
 
 	kfree_hook(object);
-	mod_lruvec_page_state(page, NR_SLAB_UNRECLAIMABLE_B, -(PAGE_SIZE << order));
-	__free_pages(page, order);
+	mod_lruvec_page_state(folio_page(folio, 0), NR_SLAB_UNRECLAIMABLE_B,
+			      -(PAGE_SIZE << order));
+	__free_pages(folio_page(folio, 0), order);
 }
 
 /*
@@ -3585,7 +3585,7 @@ int build_detached_freelist(struct kmem_cache *s, size_t size,
 	if (!s) {
 		/* Handle kalloc'ed objects */
 		if (unlikely(!folio_test_slab(folio))) {
-			free_nonslab_page(folio_page(folio, 0), object);
+			free_large_kmalloc(folio, object);
 			p[size] = NULL; /* mark object processed */
 			return size;
 		}
@@ -4346,7 +4346,8 @@ void kmem_obj_info(struct kmem_obj_info *kpp, void *object, struct slab *slab)
 	kpp->kp_data_offset = (unsigned long)((char *)objp0 - (char *)objp);
 	objp = base + s->size * objnr;
 	kpp->kp_objp = objp;
-	if (WARN_ON_ONCE(objp < base || objp >= base + slab->objects * s->size || (objp - base) % s->size) ||
+	if (WARN_ON_ONCE(objp < base || objp >= base + slab->objects * s->size
+			 || (objp - base) % s->size) ||
 	    !(s->flags & SLAB_STORE_USER))
 		return;
 #ifdef CONFIG_SLUB_DEBUG
@@ -4554,7 +4555,7 @@ void kfree(const void *x)
 
 	folio = virt_to_folio(x);
 	if (unlikely(!folio_test_slab(folio))) {
-		free_nonslab_page(folio_page(folio, 0), object);
+		free_large_kmalloc(folio, object);
 		return;
 	}
 	slab = folio_slab(folio);

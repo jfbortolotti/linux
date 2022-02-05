@@ -167,6 +167,15 @@ void xor_arm64_neon_5(unsigned long bytes, unsigned long *p1,
 	} while (--lines > 0);
 }
 
+struct xor_block_template xor_block_inner_neon __ro_after_init = {
+	.name	= "__inner_neon__",
+	.do_2	= xor_arm64_neon_2,
+	.do_3	= xor_arm64_neon_3,
+	.do_4	= xor_arm64_neon_4,
+	.do_5	= xor_arm64_neon_5,
+};
+EXPORT_SYMBOL(xor_block_inner_neon);
+
 static inline uint64x2_t eor3(uint64x2_t p, uint64x2_t q, uint64x2_t r)
 {
 	uint64x2_t res;
@@ -295,15 +304,6 @@ static void xor_arm64_eor3_5(unsigned long bytes, unsigned long *p1,
 		dp5 += 8;
 	} while (--lines > 0);
 }
-
-struct xor_block_template xor_block_inner_neon __ro_after_init = {
-	.name	= "__inner_neon__",
-	.do_2	= xor_arm64_neon_2,
-	.do_3	= xor_arm64_neon_3,
-	.do_4	= xor_arm64_neon_4,
-	.do_5	= xor_arm64_neon_5,
-};
-EXPORT_SYMBOL(xor_block_inner_neon);
 
 static int __init xor_neon_init(void)
 {

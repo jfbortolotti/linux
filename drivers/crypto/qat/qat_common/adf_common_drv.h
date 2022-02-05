@@ -114,6 +114,7 @@ void adf_cleanup_etr_data(struct adf_accel_dev *accel_dev);
 int qat_crypto_register(void);
 int qat_crypto_unregister(void);
 int qat_crypto_dev_config(struct adf_accel_dev *accel_dev);
+int qat_crypto_vf_dev_config(struct adf_accel_dev *accel_dev);
 struct qat_crypto_instance *qat_crypto_get_instance_node(int node);
 void qat_crypto_put_instance(struct qat_crypto_instance *inst);
 void qat_alg_callback(void *resp);
@@ -243,4 +244,15 @@ static inline void adf_flush_vf_wq(struct adf_accel_dev *accel_dev)
 }
 
 #endif
+
+static inline void __iomem *adf_get_pmisc_base(struct adf_accel_dev *accel_dev)
+{
+	struct adf_hw_device_data *hw_data = accel_dev->hw_device;
+	struct adf_bar *pmisc;
+
+	pmisc = &GET_BARS(accel_dev)[hw_data->get_misc_bar_id(hw_data)];
+
+	return pmisc->virt_addr;
+}
+
 #endif

@@ -245,7 +245,8 @@ static void vmx_sync_vmcs_host_state(struct vcpu_vmx *vmx,
 	src = &prev->host_state;
 	dest = &vmx->loaded_vmcs->host_state;
 
-	vmx_set_host_fs_gs(dest, src->fs_sel, src->gs_sel, src->fs_base, src->gs_base);
+	vmx_set_vmcs_host_state(dest, src->cr3, src->fs_sel, src->gs_sel,
+				src->fs_base, src->gs_base);
 	dest->ldt_sel = src->ldt_sel;
 #ifdef CONFIG_X86_64
 	dest->ds_sel = src->ds_sel;
@@ -3525,9 +3526,12 @@ static int nested_vmx_run(struct kvm_vcpu *vcpu, bool launch)
 	if (evmptrld_status == EVMPTRLD_ERROR) {
 		kvm_queue_exception(vcpu, UD_VECTOR);
 		return 1;
-	} else if (CC(evmptrld_status == EVMPTRLD_VMFAIL)) {
-		return nested_vmx_failInvalid(vcpu);
 	}
+
+	kvm_pmu_trigger_event(vcpu, PERF_COUNT_HW_BRANCH_INSTRUCTIONS);
+
+	if (CC(evmptrld_status == EVMPTRLD_VMFAIL))
+		return nested_vmx_failInvalid(vcpu);
 
 	if (CC(!evmptr_is_valid(vmx->nested.hv_evmcs_vmptr) &&
 	       vmx->nested.current_vmptr == INVALID_GPA))

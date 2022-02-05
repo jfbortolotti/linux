@@ -12,13 +12,10 @@
 from __future__ import annotations
 import re
 
-from collections import namedtuple
-from datetime import datetime
+import datetime
 from enum import Enum, auto
 from functools import reduce
 from typing import Iterable, Iterator, List, Optional, Tuple
-
-TestResult = namedtuple('TestResult', ['status','test','log'])
 
 class Test(object):
 	"""
@@ -520,7 +517,7 @@ ANSI_LEN = len(red(''))
 
 def print_with_timestamp(message: str) -> None:
 	"""Prints message with timestamp at beginning."""
-	print('[%s] %s' % (datetime.now().strftime('%H:%M:%S'), message))
+	print('[%s] %s' % (datetime.datetime.now().strftime('%H:%M:%S'), message))
 
 def format_test_divider(message: str, len_message: int) -> str:
 	"""
@@ -805,7 +802,7 @@ def parse_test(lines: LineStream, expected_num: int, log: List[str]) -> Test:
 		print_test_result(test)
 	return test
 
-def parse_run_tests(kernel_output: Iterable[str]) -> TestResult:
+def parse_run_tests(kernel_output: Iterable[str]) -> Test:
 	"""
 	Using kernel output, extract KTAP lines, parse the lines for test
 	results and print condensed test results and summary line .
@@ -814,8 +811,7 @@ def parse_run_tests(kernel_output: Iterable[str]) -> TestResult:
 	kernel_output - Iterable object contains lines of kernel output
 
 	Return:
-	TestResult - Tuple containg status of main test object, main test
-		object with all subtests, and log of all KTAP lines.
+	Test - the main test object with all subtests.
 	"""
 	print_with_timestamp(DIVIDER)
 	lines = extract_tap_lines(kernel_output)
@@ -829,4 +825,4 @@ def parse_run_tests(kernel_output: Iterable[str]) -> TestResult:
 			test.status = test.counts.get_status()
 	print_with_timestamp(DIVIDER)
 	print_summary_line(test)
-	return TestResult(test.status, test, lines)
+	return test

@@ -429,7 +429,7 @@ static void *kfence_guarded_alloc(struct kmem_cache *cache, size_t size, gfp_t g
 	slab->slab_cache = cache;
 #if defined(CONFIG_SLUB)
 	slab->objects = 1;
-#elif defined (CONFIG_SLAB)
+#elif defined(CONFIG_SLAB)
 	slab->s_mem = addr;
 #endif
 

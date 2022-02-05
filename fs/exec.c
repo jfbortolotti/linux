@@ -1046,7 +1046,7 @@ static int de_thread(struct task_struct *tsk)
 	 * Kill all other threads in the thread group.
 	 */
 	spin_lock_irq(lock);
-	if (signal_group_exit(sig)) {
+	if ((sig->flags & SIGNAL_GROUP_EXIT) || sig->group_exec_task) {
 		/*
 		 * Another group action in progress, just
 		 * return so that the signal is processed.
@@ -1055,7 +1055,7 @@ static int de_thread(struct task_struct *tsk)
 		return -EAGAIN;
 	}
 
-	sig->group_exit_task = tsk;
+	sig->group_exec_task = tsk;
 	sig->notify_count = zap_other_threads(tsk);
 	if (!thread_group_leader(tsk))
 		sig->notify_count--;
@@ -1083,7 +1083,7 @@ static int de_thread(struct task_struct *tsk)
 			write_lock_irq(&tasklist_lock);
 			/*
 			 * Do this under tasklist_lock to ensure that
-			 * exit_notify() can't miss ->group_exit_task
+			 * exit_notify() can't miss ->group_exec_task
 			 */
 			sig->notify_count = -1;
 			if (likely(leader->exit_state))
@@ -1150,7 +1150,7 @@ static int de_thread(struct task_struct *tsk)
 		release_task(leader);
 	}
 
-	sig->group_exit_task = NULL;
+	sig->group_exec_task = NULL;
 	sig->notify_count = 0;
 
 no_thread_group:
@@ -1163,7 +1163,7 @@ no_thread_group:
 killed:
 	/* protects against exit_notify() and __exit_signal() */
 	read_lock(&tasklist_lock);
-	sig->group_exit_task = NULL;
+	sig->group_exec_task = NULL;
 	sig->notify_count = 0;
 	read_unlock(&tasklist_lock);
 	return -EAGAIN;
@@ -1309,6 +1309,8 @@ int begin_new_exec(struct linux_binprm * bprm)
 	 */
 	force_uaccess_begin();
 
+	if (me->flags & PF_KTHREAD)
+		free_kthread_struct(me);
 	me->flags &= ~(PF_RANDOMIZE | PF_FORKNOEXEC | PF_KTHREAD |
 					PF_NOFREEZE | PF_NO_SETAFFINITY);
 	flush_thread();

@@ -53,15 +53,16 @@ static inline unsigned int fold_hash(unsigned long x, unsigned long y)
 /*
  * Generate a hash.  This is derived from full_name_hash(), but we want to be
  * sure it is arch independent and that it doesn't change as bits of the
- * computed hash value might appear on disk.  The caller also guarantees that
- * the hashed data will be a series of aligned 32-bit words.
+ * computed hash value might appear on disk.  The caller must guarantee that
+ * the source data is a multiple of four bytes in size.
  */
-unsigned int fscache_hash(unsigned int salt, unsigned int *data, unsigned int n)
+unsigned int fscache_hash(unsigned int salt, const void *data, size_t len)
 {
-	unsigned int a, x = 0, y = salt;
+	const __le32 *p = data;
+	unsigned int a, x = 0, y = salt, n = len / sizeof(__le32);
 
 	for (; n; n--) {
-		a = *data++;
+		a = le32_to_cpu(*p++);
 		HASH_MIX(x, y, a);
 	}
 	return fold_hash(x, y);

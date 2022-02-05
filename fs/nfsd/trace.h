@@ -389,6 +389,56 @@ TRACE_EVENT(nfsd_dirent,
 	)
 )
 
+DECLARE_EVENT_CLASS(nfsd_copy_err_class,
+	TP_PROTO(struct svc_rqst *rqstp,
+		 struct svc_fh	*src_fhp,
+		 loff_t		src_offset,
+		 struct svc_fh	*dst_fhp,
+		 loff_t		dst_offset,
+		 u64		count,
+		 int		status),
+	TP_ARGS(rqstp, src_fhp, src_offset, dst_fhp, dst_offset, count, status),
+	TP_STRUCT__entry(
+		__field(u32, xid)
+		__field(u32, src_fh_hash)
+		__field(loff_t, src_offset)
+		__field(u32, dst_fh_hash)
+		__field(loff_t, dst_offset)
+		__field(u64, count)
+		__field(int, status)
+	),
+	TP_fast_assign(
+		__entry->xid = be32_to_cpu(rqstp->rq_xid);
+		__entry->src_fh_hash = knfsd_fh_hash(&src_fhp->fh_handle);
+		__entry->src_offset = src_offset;
+		__entry->dst_fh_hash = knfsd_fh_hash(&dst_fhp->fh_handle);
+		__entry->dst_offset = dst_offset;
+		__entry->count = count;
+		__entry->status = status;
+	),
+	TP_printk("xid=0x%08x src_fh_hash=0x%08x src_offset=%lld "
+			"dst_fh_hash=0x%08x dst_offset=%lld "
+			"count=%llu status=%d",
+		  __entry->xid, __entry->src_fh_hash, __entry->src_offset,
+		  __entry->dst_fh_hash, __entry->dst_offset,
+		  (unsigned long long)__entry->count,
+		  __entry->status)
+)
+
+#define DEFINE_NFSD_COPY_ERR_EVENT(name)		\
+DEFINE_EVENT(nfsd_copy_err_class, nfsd_##name,		\
+	TP_PROTO(struct svc_rqst	*rqstp,		\
+		 struct svc_fh		*src_fhp,	\
+		 loff_t			src_offset,	\
+		 struct svc_fh		*dst_fhp,	\
+		 loff_t			dst_offset,	\
+		 u64			count,		\
+		 int			status),	\
+	TP_ARGS(rqstp, src_fhp, src_offset, dst_fhp, dst_offset, \
+		count, status))
+
+DEFINE_NFSD_COPY_ERR_EVENT(clone_file_range_err);
+
 #include "state.h"
 #include "filecache.h"
 #include "vfs.h"
@@ -513,6 +563,34 @@ DEFINE_EVENT(nfsd_net_class, nfsd_##name, \
 
 DEFINE_NET_EVENT(grace_start);
 DEFINE_NET_EVENT(grace_complete);
+
+TRACE_EVENT(nfsd_writeverf_reset,
+	TP_PROTO(
+		const struct nfsd_net *nn,
+		const struct svc_rqst *rqstp,
+		int error
+	),
+	TP_ARGS(nn, rqstp, error),
+	TP_STRUCT__entry(
+		__field(unsigned long long, boot_time)
+		__field(u32, xid)
+		__field(int, error)
+		__array(unsigned char, verifier, NFS4_VERIFIER_SIZE)
+	),
+	TP_fast_assign(
+		__entry->boot_time = nn->boot_time;
+		__entry->xid = be32_to_cpu(rqstp->rq_xid);
+		__entry->error = error;
+
+		/* avoid seqlock inside TP_fast_assign */
+		memcpy(__entry->verifier, nn->writeverf,
+		       NFS4_VERIFIER_SIZE);
+	),
+	TP_printk("boot_time=%16llx xid=0x%08x error=%d new verifier=0x%s",
+		__entry->boot_time, __entry->xid, __entry->error,
+		__print_hex_str(__entry->verifier, NFS4_VERIFIER_SIZE)
+	)
+);
 
 TRACE_EVENT(nfsd_clid_cred_mismatch,
 	TP_PROTO(

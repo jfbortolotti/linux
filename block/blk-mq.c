@@ -709,6 +709,47 @@ static void blk_print_req_error(struct request *req, blk_status_t status)
 		IOPRIO_PRIO_CLASS(req->ioprio));
 }
 
+/*
+ * Fully end IO on a request. Does not support partial completions, or
+ * errors.
+ */
+static void blk_complete_request(struct request *req)
+{
+	const bool is_flush = (req->rq_flags & RQF_FLUSH_SEQ) != 0;
+	int total_bytes = blk_rq_bytes(req);
+	struct bio *bio = req->bio;
+
+	trace_block_rq_complete(req, BLK_STS_OK, total_bytes);
+
+	if (!bio)
+		return;
+
+#ifdef CONFIG_BLK_DEV_INTEGRITY
+	if (blk_integrity_rq(req) && req_op(req) == REQ_OP_READ)
+		req->q->integrity.profile->complete_fn(req, total_bytes);
+#endif
+
+	blk_account_io_completion(req, total_bytes);
+
+	do {
+		struct bio *next = bio->bi_next;
+
+		/* Completion has already been traced */
+		bio_clear_flag(bio, BIO_TRACE_COMPLETION);
+		if (!is_flush)
+			bio_endio(bio);
+		bio = next;
+	} while (bio);
+
+	/*
+	 * Reset counters so that the request stacking driver
+	 * can find how many bytes remain in the request
+	 * later.
+	 */
+	req->bio = NULL;
+	req->__data_len = 0;
+}
+
 /**
  * blk_update_request - Complete multiple bytes without completing the request
  * @req:      the request being processed
@@ -922,7 +963,7 @@ void blk_mq_end_request_batch(struct io_comp_batch *iob)
 		prefetch(rq->bio);
 		prefetch(rq->rq_next);
 
-		blk_update_request(rq, BLK_STS_OK, blk_rq_bytes(rq));
+		blk_complete_request(rq);
 		if (iob->need_ts)
 			__blk_mq_end_request_acct(rq, now);
 
@@ -2508,10 +2549,19 @@ static void blk_mq_plug_issue_direct(struct blk_plug *plug, bool from_schedule)
 		blk_mq_commit_rqs(hctx, &queued, from_schedule);
 }
 
+static void __blk_mq_flush_plug_list(struct request_queue *q,
+				     struct blk_plug *plug)
+{
+	if (blk_queue_quiesced(q))
+		return;
+	q->mq_ops->queue_rqs(&plug->mq_list);
+}
+
 void blk_mq_flush_plug_list(struct blk_plug *plug, bool from_schedule)
 {
 	struct blk_mq_hw_ctx *this_hctx;
 	struct blk_mq_ctx *this_ctx;
+	struct request *rq;
 	unsigned int depth;
 	LIST_HEAD(list);
 
@@ -2520,7 +2570,28 @@ void blk_mq_flush_plug_list(struct blk_plug *plug, bool from_schedule)
 	plug->rq_count = 0;
 
 	if (!plug->multiple_queues && !plug->has_elevator && !from_schedule) {
-		struct request_queue *q = rq_list_peek(&plug->mq_list)->q;
+		struct request_queue *q;
+
+		rq = rq_list_peek(&plug->mq_list);
+		q = rq->q;
+
+		/*
+		 * Peek first request and see if we have a ->queue_rqs() hook.
+		 * If we do, we can dispatch the whole plug list in one go. We
+		 * already know at this point that all requests belong to the
+		 * same queue, caller must ensure that's the case.
+		 *
+		 * Since we pass off the full list to the driver at this point,
+		 * we do not increment the active request count for the queue.
+		 * Bypass shared tags for now because of that.
+		 */
+		if (q->mq_ops->queue_rqs &&
+		    !(rq->mq_hctx->flags & BLK_MQ_F_TAG_QUEUE_SHARED)) {
+			blk_mq_run_dispatch_ops(q,
+				__blk_mq_flush_plug_list(q, plug));
+			if (rq_list_empty(plug->mq_list))
+				return;
+		}
 
 		blk_mq_run_dispatch_ops(q,
 				blk_mq_plug_issue_direct(plug, false));
@@ -2532,8 +2603,6 @@ void blk_mq_flush_plug_list(struct blk_plug *plug, bool from_schedule)
 	this_ctx = NULL;
 	depth = 0;
 	do {
-		struct request *rq;
-
 		rq = rq_list_pop(&plug->mq_list);
 
 		if (!this_hctx) {
@@ -2645,26 +2714,18 @@ static bool blk_mq_attempt_bio_merge(struct request_queue *q,
 
 static struct request *blk_mq_get_new_requests(struct request_queue *q,
 					       struct blk_plug *plug,
-					       struct bio *bio,
-					       unsigned int nsegs)
+					       struct bio *bio)
 {
 	struct blk_mq_alloc_data data = {
 		.q		= q,
 		.nr_tags	= 1,
+		.cmd_flags	= bio->bi_opf,
 	};
 	struct request *rq;
 
 	if (unlikely(bio_queue_enter(bio)))
 		return NULL;
-	if (unlikely(!submit_bio_checks(bio)))
-		goto queue_exit;
-	if (blk_mq_attempt_bio_merge(q, bio, nsegs))
-		goto queue_exit;
 
-	rq_qos_throttle(q, bio);
-
-	/* ->bi_opf is finalized after submit_bio_checks() returns */
-	data.cmd_flags	= bio->bi_opf;
 	if (plug) {
 		data.nr_tags = plug->nr_ios;
 		plug->nr_ios = 1;
@@ -2677,13 +2738,12 @@ static struct request *blk_mq_get_new_requests(struct request_queue *q,
 	rq_qos_cleanup(q, bio);
 	if (bio->bi_opf & REQ_NOWAIT)
 		bio_wouldblock_error(bio);
-queue_exit:
 	blk_queue_exit(q);
 	return NULL;
 }
 
 static inline struct request *blk_mq_get_cached_request(struct request_queue *q,
-		struct blk_plug *plug, struct bio **bio, unsigned int nsegs)
+		struct blk_plug *plug, struct bio *bio)
 {
 	struct request *rq;
 
@@ -2693,21 +2753,14 @@ static inline struct request *blk_mq_get_cached_request(struct request_queue *q,
 	if (!rq || rq->q != q)
 		return NULL;
 
-	if (unlikely(!submit_bio_checks(*bio)))
+	if (blk_mq_get_hctx_type(bio->bi_opf) != rq->mq_hctx->type)
 		return NULL;
-	if (blk_mq_attempt_bio_merge(q, *bio, nsegs)) {
-		*bio = NULL;
-		return NULL;
-	}
-	if (blk_mq_get_hctx_type((*bio)->bi_opf) != rq->mq_hctx->type)
-		return NULL;
-	if (op_is_flush(rq->cmd_flags) != op_is_flush((*bio)->bi_opf))
+	if (op_is_flush(rq->cmd_flags) != op_is_flush(bio->bi_opf))
 		return NULL;
 
-	rq->cmd_flags = (*bio)->bi_opf;
+	rq->cmd_flags = bio->bi_opf;
 	plug->cached_rq = rq_list_next(rq);
 	INIT_LIST_HEAD(&rq->queuelist);
-	rq_qos_throttle(q, *bio);
 	return rq;
 }
 
@@ -2743,11 +2796,14 @@ void blk_mq_submit_bio(struct bio *bio)
 	if (!bio_integrity_prep(bio))
 		return;
 
-	rq = blk_mq_get_cached_request(q, plug, &bio, nr_segs);
+	if (blk_mq_attempt_bio_merge(q, bio, nr_segs))
+		return;
+
+	rq_qos_throttle(q, bio);
+
+	rq = blk_mq_get_cached_request(q, plug, bio);
 	if (!rq) {
-		if (!bio)
-			return;
-		rq = blk_mq_get_new_requests(q, plug, bio, nr_segs);
+		rq = blk_mq_get_new_requests(q, plug, bio);
 		if (unlikely(!rq))
 			return;
 	}

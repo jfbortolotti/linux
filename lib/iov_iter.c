@@ -78,13 +78,14 @@
 	rcu_read_lock();					\
 	xas_for_each(&xas, folio, ULONG_MAX) {			\
 		unsigned left;					\
-		size_t offset = offset_in_folio(folio, start + __off);	\
+		size_t offset;					\
 		if (xas_retry(&xas, folio))			\
 			continue;				\
 		if (WARN_ON(xa_is_value(folio)))		\
 			break;					\
 		if (WARN_ON(folio_test_hugetlb(folio)))		\
 			break;					\
+		offset = offset_in_folio(folio, start + __off);	\
 		while (offset < folio_size(folio)) {		\
 			base = kmap_local_folio(folio, offset);	\
 			len = min(n, len);			\

@@ -237,20 +237,19 @@ static bool remove_migration_pte(struct page *page, struct vm_area_struct *vma,
 
 			pte = pte_mkhuge(pte);
 			pte = arch_make_huge_pte(pte, shift, vma->vm_flags);
-			set_huge_pte_at(vma->vm_mm, pvmw.address, pvmw.pte, pte);
 			if (PageAnon(new))
 				hugepage_add_anon_rmap(new, vma, pvmw.address);
 			else
 				page_dup_rmap(new, true);
+			set_huge_pte_at(vma->vm_mm, pvmw.address, pvmw.pte, pte);
 		} else
 #endif
 		{
-			set_pte_at(vma->vm_mm, pvmw.address, pvmw.pte, pte);
-
 			if (PageAnon(new))
 				page_add_anon_rmap(new, vma, pvmw.address, false);
 			else
 				page_add_file_rmap(new, false);
+			set_pte_at(vma->vm_mm, pvmw.address, pvmw.pte, pte);
 		}
 		if (vma->vm_flags & VM_LOCKED && !PageTransCompound(new))
 			mlock_vma_page(new);
@@ -292,7 +291,6 @@ void __migration_entry_wait(struct mm_struct *mm, pte_t *ptep,
 {
 	pte_t pte;
 	swp_entry_t entry;
-	struct folio *folio;
 
 	spin_lock(ptl);
 	pte = *ptep;
@@ -303,17 +301,7 @@ void __migration_entry_wait(struct mm_struct *mm, pte_t *ptep,
 	if (!is_migration_entry(entry))
 		goto out;
 
-	folio = page_folio(pfn_swap_entry_to_page(entry));
-
-	/*
-	 * Once page cache replacement of page migration started, page_count
-	 * is zero; but we must not call folio_put_wait_locked() without
-	 * a ref. Use folio_try_get(), and just fault again if it fails.
-	 */
-	if (!folio_try_get(folio))
-		goto out;
-	pte_unmap_unlock(ptep, ptl);
-	folio_put_wait_locked(folio, TASK_UNINTERRUPTIBLE);
+	migration_entry_wait_on_locked(entry, ptep, ptl);
 	return;
 out:
 	pte_unmap_unlock(ptep, ptl);
@@ -338,14 +326,11 @@ void migration_entry_wait_huge(struct vm_area_struct *vma,
 void pmd_migration_entry_wait(struct mm_struct *mm, pmd_t *pmd)
 {
 	spinlock_t *ptl;
-	struct folio *folio;
+
+	ptl = pmd_lock(mm, pmd);
 	if (!is_pmd_migration_entry(*pmd))
 		goto unlock;
-	folio = page_folio(pfn_swap_entry_to_page(pmd_to_swp_entry(*pmd)));
-	if (!folio_try_get(folio))
-		goto unlock;
-	spin_unlock(ptl);
-	folio_put_wait_locked(folio, TASK_UNINTERRUPTIBLE);
+	migration_entry_wait_on_locked(pmd_to_swp_entry(*pmd), NULL, ptl);
 	return;
 unlock:
 	spin_unlock(ptl);
@@ -2457,8 +2442,7 @@ static bool migrate_vma_check_page(struct page *page)
 static void migrate_vma_unmap(struct migrate_vma *migrate)
 {
 	const unsigned long npages = migrate->npages;
-	const unsigned long start = migrate->start;
-	unsigned long addr, i, restore = 0;
+	unsigned long i, restore = 0;
 	bool allow_drain = true;
 
 	lru_add_drain();
@@ -2504,7 +2488,7 @@ static void migrate_vma_unmap(struct migrate_vma *migrate)
 		}
 	}
 
-	for (addr = start, i = 0; i < npages && restore; addr += PAGE_SIZE, i++) {
+	for (i = 0; i < npages && restore; i++) {
 		struct page *page = migrate_pfn_to_page(migrate->src[i]);
 
 		if (!page || (migrate->src[i] & MIGRATE_PFN_MIGRATE))

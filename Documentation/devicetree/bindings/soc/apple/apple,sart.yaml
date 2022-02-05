@@ -19,15 +19,16 @@ description:
 
 properties:
   compatible:
-    const: apple,t8103-sart
+    oneOf:
+      - items:
+          - const: apple,t6000-sart
+          - const: apple,sart3
+      - items:
+          - const: apple,t8103-sart
+          - const: apple,sart2
 
   reg:
     maxItems: 1
-
-  clocks:
-    description:
-      Reference to the clock gate phandle(s) if required before accessing
-      the MMIO region of this SART.
 
   power-domains:
     maxItems: 1
@@ -41,6 +42,6 @@ additionalProperties: false
 examples:
   - |
         sart@7bc50000 {
-                compatible = "apple,t8103-sart";
-                reg = <0x2 0x7bc50000 0x0 0x10000>;
+                compatible = "apple,t8103-sart", "apple,sart2";
+                reg = <0x7bc50000 0x4000>;
         };

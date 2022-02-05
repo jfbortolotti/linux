@@ -86,7 +86,7 @@ static inline void fscache_end_operation(struct netfs_cache_resources *cres)
  */
 extern unsigned fscache_debug;
 
-extern unsigned int fscache_hash(unsigned int salt, unsigned int *data, unsigned int n);
+extern unsigned int fscache_hash(unsigned int salt, const void *data, size_t len);
 
 /*
  * proc.c

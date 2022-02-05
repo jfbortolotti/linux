@@ -80,7 +80,6 @@ struct fscache_volume {
 	struct work_struct		work;
 	struct fscache_cache		*cache;		/* The cache in which this resides */
 	void				*cache_priv;	/* Cache private data */
-	u64				coherency;	/* Coherency data */
 	spinlock_t			lock;
 	unsigned long			flags;
 #define FSCACHE_VOLUME_RELINQUISHED	0	/* Volume is being cleaned up */
@@ -88,6 +87,8 @@ struct fscache_volume {
 #define FSCACHE_VOLUME_COLLIDED_WITH	2	/* Volume was collided with */
 #define FSCACHE_VOLUME_ACQUIRE_PENDING	3	/* Volume is waiting to complete acquisition */
 #define FSCACHE_VOLUME_CREATING		4	/* Volume is being created on disk */
+	u8				coherency_len;	/* Length of the coherency data */
+	u8				coherency[];	/* Coherency data */
 };
 
 /*
@@ -127,6 +128,7 @@ struct fscache_cookie {
 #define FSCACHE_COOKIE_DO_LRU_DISCARD	11		/* T if this cookie needs LRU discard */
 #define FSCACHE_COOKIE_DO_PREP_TO_WRITE	12		/* T if cookie needs write preparation */
 #define FSCACHE_COOKIE_HAVE_DATA	13		/* T if this cookie has data stored */
+#define FSCACHE_COOKIE_IS_HASHED	14		/* T if this cookie is hashed */
 
 	enum fscache_cookie_state	state;
 	u8				advice;		/* FSCACHE_ADV_* */
@@ -150,8 +152,9 @@ struct fscache_cookie {
  * - these are undefined symbols when FS-Cache is not configured and the
  *   optimiser takes care of not using them
  */
-extern struct fscache_volume *__fscache_acquire_volume(const char *, const char *, u64);
-extern void __fscache_relinquish_volume(struct fscache_volume *, u64, bool);
+extern struct fscache_volume *__fscache_acquire_volume(const char *, const char *,
+						       const void *, size_t);
+extern void __fscache_relinquish_volume(struct fscache_volume *, const void *, bool);
 
 extern struct fscache_cookie *__fscache_acquire_cookie(
 	struct fscache_volume *,
@@ -165,6 +168,7 @@ extern void __fscache_relinquish_cookie(struct fscache_cookie *, bool);
 extern void __fscache_resize_cookie(struct fscache_cookie *, loff_t);
 extern void __fscache_invalidate(struct fscache_cookie *, const void *, loff_t, unsigned int);
 extern int __fscache_begin_read_operation(struct netfs_cache_resources *, struct fscache_cookie *);
+extern int __fscache_begin_write_operation(struct netfs_cache_resources *, struct fscache_cookie *);
 
 extern void __fscache_write_to_cache(struct fscache_cookie *, struct address_space *,
 				     loff_t, size_t, loff_t, netfs_io_terminated_t, void *,
@@ -175,7 +179,8 @@ extern void __fscache_clear_page_bits(struct address_space *, loff_t, size_t);
  * fscache_acquire_volume - Register a volume as desiring caching services
  * @volume_key: An identification string for the volume
  * @cache_name: The name of the cache to use (or NULL for the default)
- * @coherency_data: Piece of arbitrary coherency data to check
+ * @coherency_data: Piece of arbitrary coherency data to check (or NULL)
+ * @coherency_len: The size of the coherency data
  *
  * Register a volume as desiring caching services if they're available.  The
  * caller must provide an identifier for the volume and may also indicate which
@@ -189,26 +194,28 @@ extern void __fscache_clear_page_bits(struct address_space *, loff_t, size_t);
 static inline
 struct fscache_volume *fscache_acquire_volume(const char *volume_key,
 					      const char *cache_name,
-					      u64 coherency_data)
+					      const void *coherency_data,
+					      size_t coherency_len)
 {
 	if (!fscache_available())
 		return NULL;
-	return __fscache_acquire_volume(volume_key, cache_name, coherency_data);
+	return __fscache_acquire_volume(volume_key, cache_name,
+					coherency_data, coherency_len);
 }
 
 /**
  * fscache_relinquish_volume - Cease caching a volume
  * @volume: The volume cookie
- * @coherency_data: Piece of arbitrary coherency data to set
+ * @coherency_data: Piece of arbitrary coherency data to set (or NULL)
  * @invalidate: True if the volume should be invalidated
  *
  * Indicate that a filesystem no longer desires caching services for a volume.
  * The caller must have relinquished all file cookies prior to calling this.
- * The coherency data stored is updated.
+ * The stored coherency data is updated.
  */
 static inline
 void fscache_relinquish_volume(struct fscache_volume *volume,
-			       u64 coherency_data,
+			       const void *coherency_data,
 			       bool invalidate)
 {
 	if (fscache_volume_valid(volume))
@@ -491,6 +498,33 @@ int fscache_read(struct netfs_cache_resources *cres,
 	const struct netfs_cache_ops *ops = fscache_operation_valid(cres);
 	return ops->read(cres, start_pos, iter, read_hole,
 			 term_func, term_func_priv);
+}
+
+/**
+ * fscache_begin_write_operation - Begin a write operation for the netfs lib
+ * @cres: The cache resources for the write being performed
+ * @cookie: The cookie representing the cache object
+ *
+ * Begin a write operation on behalf of the netfs helper library.  @cres
+ * indicates the cache resources to which the operation state should be
+ * attached; @cookie indicates the cache object that will be accessed.
+ *
+ * @cres->inval_counter is set from @cookie->inval_counter for comparison at
+ * the end of the operation.  This allows invalidation during the operation to
+ * be detected by the caller.
+ *
+ * Returns:
+ * * 0		- Success
+ * * -ENOBUFS	- No caching available
+ * * Other error code from the cache, such as -ENOMEM.
+ */
+static inline
+int fscache_begin_write_operation(struct netfs_cache_resources *cres,
+				  struct fscache_cookie *cookie)
+{
+	if (fscache_cookie_enabled(cookie))
+		return __fscache_begin_write_operation(cres, cookie);
+	return -ENOBUFS;
 }
 
 /**

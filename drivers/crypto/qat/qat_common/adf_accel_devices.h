@@ -8,6 +8,7 @@
 #include <linux/io.h>
 #include <linux/ratelimit.h>
 #include "adf_cfg_common.h"
+#include "adf_pfvf_msg.h"
 
 #define ADF_DH895XCC_DEVICE_NAME "dh895xcc"
 #define ADF_DH895XCCVF_DEVICE_NAME "dh895xccvf"
@@ -154,8 +155,10 @@ struct adf_pfvf_ops {
 	u32 (*get_vf2pf_sources)(void __iomem *pmisc_addr);
 	void (*enable_vf2pf_interrupts)(void __iomem *pmisc_addr, u32 vf_mask);
 	void (*disable_vf2pf_interrupts)(void __iomem *pmisc_addr, u32 vf_mask);
-	int (*send_msg)(struct adf_accel_dev *accel_dev, u32 msg, u8 vf_nr);
-	u32 (*recv_msg)(struct adf_accel_dev *accel_dev, u8 vf_nr);
+	int (*send_msg)(struct adf_accel_dev *accel_dev, struct pfvf_message msg,
+			u32 pfvf_offset, struct mutex *csr_lock);
+	struct pfvf_message (*recv_msg)(struct adf_accel_dev *accel_dev,
+					u32 pfvf_offset, u8 compat_ver);
 };
 
 struct adf_hw_device_data {
@@ -186,11 +189,12 @@ struct adf_hw_device_data {
 				      bool enable);
 	void (*enable_ints)(struct adf_accel_dev *accel_dev);
 	void (*set_ssm_wdtimer)(struct adf_accel_dev *accel_dev);
+	int (*ring_pair_reset)(struct adf_accel_dev *accel_dev, u32 bank_nr);
 	void (*reset_device)(struct adf_accel_dev *accel_dev);
 	void (*set_msix_rttable)(struct adf_accel_dev *accel_dev);
-	char *(*uof_get_name)(u32 obj_num);
+	char *(*uof_get_name)(struct adf_accel_dev *accel_dev, u32 obj_num);
 	u32 (*uof_get_num_objs)(void);
-	u32 (*uof_get_ae_mask)(u32 obj_num);
+	u32 (*uof_get_ae_mask)(struct adf_accel_dev *accel_dev, u32 obj_num);
 	struct adf_pfvf_ops pfvf_ops;
 	struct adf_hw_csr_ops csr_ops;
 	const char *fw_name;
@@ -198,13 +202,17 @@ struct adf_hw_device_data {
 	u32 fuses;
 	u32 straps;
 	u32 accel_capabilities_mask;
+	u32 extended_dc_capabilities;
+	u32 clock_frequency;
 	u32 instance_id;
 	u16 accel_mask;
 	u32 ae_mask;
 	u32 admin_ae_mask;
 	u16 tx_rings_mask;
+	u16 ring_to_svc_map;
 	u8 tx_rx_gap;
 	u8 num_banks;
+	u16 num_banks_per_vf;
 	u8 num_rings_per_bank;
 	u8 num_accel;
 	u8 num_logical_accel;
@@ -218,12 +226,19 @@ struct adf_hw_device_data {
 /* CSR read macro */
 #define ADF_CSR_RD(csr_base, csr_offset) __raw_readl(csr_base + csr_offset)
 
+#define ADF_CFG_NUM_SERVICES	4
+#define ADF_SRV_TYPE_BIT_LEN	3
+#define ADF_SRV_TYPE_MASK	0x7
+
 #define GET_DEV(accel_dev) ((accel_dev)->accel_pci_dev.pci_dev->dev)
 #define GET_BARS(accel_dev) ((accel_dev)->accel_pci_dev.pci_bars)
 #define GET_HW_DATA(accel_dev) (accel_dev->hw_device)
 #define GET_MAX_BANKS(accel_dev) (GET_HW_DATA(accel_dev)->num_banks)
 #define GET_NUM_RINGS_PER_BANK(accel_dev) \
 	GET_HW_DATA(accel_dev)->num_rings_per_bank
+#define GET_SRV_TYPE(accel_dev, idx) \
+	(((GET_HW_DATA(accel_dev)->ring_to_svc_map) >> (ADF_SRV_TYPE_BIT_LEN * (idx))) \
+	& ADF_SRV_TYPE_MASK)
 #define GET_MAX_ACCELENGINES(accel_dev) (GET_HW_DATA(accel_dev)->num_engines)
 #define GET_CSR_OPS(accel_dev) (&(accel_dev)->hw_device->csr_ops)
 #define GET_PFVF_OPS(accel_dev) (&(accel_dev)->hw_device->pfvf_ops)
@@ -243,6 +258,7 @@ struct adf_accel_vf_info {
 	struct ratelimit_state vf2pf_ratelimit;
 	u32 vf_nr;
 	bool init;
+	u8 vf_compat_ver;
 };
 
 struct adf_accel_dev {
@@ -271,8 +287,8 @@ struct adf_accel_dev {
 			struct tasklet_struct pf2vf_bh_tasklet;
 			struct mutex vf2pf_lock; /* protect CSR access */
 			struct completion msg_received;
-			u32 response; /* temp field holding pf2vf response */
-			u8 pf_version;
+			struct pfvf_message response; /* temp field holding pf2vf response */
+			u8 pf_compat_ver;
 		} vf;
 	};
 	bool is_vf;

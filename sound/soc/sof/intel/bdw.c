@@ -258,8 +258,8 @@ static void bdw_dump(struct snd_sof_dev *sdev, u32 flags)
 	panic = snd_sof_dsp_read(sdev, BDW_DSP_BAR, SHIM_IPCX);
 	bdw_get_registers(sdev, &xoops, &panic_info, stack,
 			  BDW_STACK_DUMP_SIZE);
-	snd_sof_get_status(sdev, status, panic, &xoops, &panic_info, stack,
-			   BDW_STACK_DUMP_SIZE);
+	sof_print_oops_and_stack(sdev, KERN_ERR, status, panic, &xoops,
+				 &panic_info, stack, BDW_STACK_DUMP_SIZE);
 
 	/* provide some context for firmware debug */
 	imrx = snd_sof_dsp_read(sdev, BDW_DSP_BAR, SHIM_IMRX);
@@ -344,8 +344,8 @@ static irqreturn_t bdw_irq_thread(int irq, void *context)
 
 		/* Handle messages from DSP Core */
 		if ((ipcd & SOF_IPC_PANIC_MAGIC_MASK) == SOF_IPC_PANIC_MAGIC) {
-			snd_sof_dsp_panic(sdev, BDW_PANIC_OFFSET(ipcx) +
-					  MBOX_OFFSET);
+			snd_sof_dsp_panic(sdev, BDW_PANIC_OFFSET(ipcx) + MBOX_OFFSET,
+					  true);
 		} else {
 			snd_sof_ipc_msgs_rx(sdev);
 		}
@@ -509,7 +509,7 @@ static int bdw_probe(struct snd_sof_dev *sdev)
 	return ret;
 }
 
-static void bdw_machine_select(struct snd_sof_dev *sdev)
+static struct snd_soc_acpi_mach *bdw_machine_select(struct snd_sof_dev *sdev)
 {
 	struct snd_sof_pdata *sof_pdata = sdev->pdata;
 	const struct sof_dev_desc *desc = sof_pdata->desc;
@@ -518,22 +518,23 @@ static void bdw_machine_select(struct snd_sof_dev *sdev)
 	mach = snd_soc_acpi_find_machine(desc->machines);
 	if (!mach) {
 		dev_warn(sdev->dev, "warning: No matching ASoC machine driver found\n");
-		return;
+		return NULL;
 	}
 
 	sof_pdata->tplg_filename = mach->sof_tplg_filename;
 	mach->mach_params.acpi_ipc_irq_index = desc->irqindex_host_ipc;
-	sof_pdata->machine = mach;
+
+	return mach;
 }
 
-static void bdw_set_mach_params(const struct snd_soc_acpi_mach *mach,
+static void bdw_set_mach_params(struct snd_soc_acpi_mach *mach,
 				struct snd_sof_dev *sdev)
 {
 	struct snd_sof_pdata *pdata = sdev->pdata;
 	const struct sof_dev_desc *desc = pdata->desc;
 	struct snd_soc_acpi_mach_params *mach_params;
 
-	mach_params = (struct snd_soc_acpi_mach_params *)&mach->mach_params;
+	mach_params = &mach->mach_params;
 	mach_params->platform = dev_name(sdev->dev);
 	mach_params->num_dai_drivers = desc->ops->num_drv;
 	mach_params->dai_drivers = desc->ops->drv;

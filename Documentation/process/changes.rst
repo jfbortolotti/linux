@@ -36,7 +36,7 @@ know what you are doing, use the exact version listed here. Please see
 ====================== ===============  ========================================
 GNU C                  5.1              gcc --version
 Clang/LLVM (optional)  11.0.0           clang --version
-rustc (optional)       1.57.0           rustc --version
+Rust (optional)        1.58.0           rustc --version
 bindgen (optional)     0.56.0           bindgen --version
 GNU make               3.81             make --version
 binutils               2.23             ld -v
@@ -84,6 +84,29 @@ The latest formal release of clang and LLVM utils (according to
 kernels. Older releases aren't guaranteed to work, and we may drop workarounds
 from the kernel that were used to support older versions. Please see additional
 docs on :ref:`Building Linux with Clang/LLVM <kbuild_llvm>`.
+
+Rust (optional)
+---------------
+
+A particular version of the Rust toolchain is required. Newer versions may or
+may not work because the kernel depends on some unstable Rust features, for
+the moment.
+
+Each Rust toolchain comes with several "components", some of which are required
+(like ``rustc``) and some that are optional. The ``rust-src`` component (which
+is optional) needs to be installed to build the kernel. Other components are
+useful for developing.
+
+Please see :ref:`Documentation/rust/quick-start.rst <rust_quick_start>` for
+instructions on how to satify the build requirements of Rust support. In
+particular, the Makefile target 'rustavailable' is useful to check why the Rust
+toolchain may not be detected.
+
+bindgen (optional)
+------------------
+
+``bindgen`` is used to generate the Rust bindings to the C side of the kernel.
+It depends on ``libclang``.
 
 Make
 ----
@@ -350,8 +373,9 @@ for details about Sphinx requirements.
 rustdoc
 -------
 
-``rustdoc`` is used to generate Rust documentation. Please see
-:ref:`Documentation/rust/docs.rst <rust_docs>` for more information.
+``rustdoc`` is used to generate the documentation for Rust code. Please see
+:ref:`Documentation/rust/general-information.rst <rust_general_information>`
+for more information.
 
 Getting updated software
 ========================
@@ -368,6 +392,16 @@ Clang/LLVM
 ----------
 
 - :ref:`Getting LLVM <getting_llvm>`.
+
+Rust
+----
+
+- :ref:`Documentation/rust/quick-start.rst <rust_quick_start>`.
+
+bindgen
+-------
+
+- :ref:`Documentation/rust/quick-start.rst <rust_quick_start>`.
 
 Make
 ----

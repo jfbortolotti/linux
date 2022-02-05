@@ -8,6 +8,7 @@
 #include "volumes.h"
 #include "disk-io.h"
 #include "block-group.h"
+#include "btrfs_inode.h"
 
 /*
  * Block groups with more than this value (percents) of unusable space will be
@@ -72,8 +73,7 @@ struct btrfs_device *btrfs_zoned_get_device(struct btrfs_fs_info *fs_info,
 					    u64 logical, u64 length);
 bool btrfs_zone_activate(struct btrfs_block_group *block_group);
 int btrfs_zone_finish(struct btrfs_block_group *block_group);
-bool btrfs_can_activate_zone(struct btrfs_fs_devices *fs_devices,
-			     int raid_index);
+bool btrfs_can_activate_zone(struct btrfs_fs_devices *fs_devices, u64 flags);
 void btrfs_zone_finish_endio(struct btrfs_fs_info *fs_info, u64 logical,
 			     u64 length);
 void btrfs_clear_data_reloc_bg(struct btrfs_block_group *bg);
@@ -225,7 +225,7 @@ static inline int btrfs_zone_finish(struct btrfs_block_group *block_group)
 }
 
 static inline bool btrfs_can_activate_zone(struct btrfs_fs_devices *fs_devices,
-					   int raid_index)
+					   u64 flags)
 {
 	return true;
 }
@@ -352,6 +352,22 @@ static inline void btrfs_clear_treelog_bg(struct btrfs_block_group *bg)
 	if (fs_info->treelog_bg == bg->start)
 		fs_info->treelog_bg = 0;
 	spin_unlock(&fs_info->treelog_bg_lock);
+}
+
+static inline void btrfs_zoned_data_reloc_lock(struct btrfs_inode *inode)
+{
+	struct btrfs_root *root = inode->root;
+
+	if (btrfs_is_data_reloc_root(root) && btrfs_is_zoned(root->fs_info))
+		btrfs_inode_lock(&inode->vfs_inode, 0);
+}
+
+static inline void btrfs_zoned_data_reloc_unlock(struct btrfs_inode *inode)
+{
+	struct btrfs_root *root = inode->root;
+
+	if (btrfs_is_data_reloc_root(root) && btrfs_is_zoned(root->fs_info))
+		btrfs_inode_unlock(&inode->vfs_inode, 0);
 }
 
 #endif

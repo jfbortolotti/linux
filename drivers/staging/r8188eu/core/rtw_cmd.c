@@ -10,7 +10,6 @@
 #include "../include/rtw_br_ext.h"
 #include "../include/rtw_mlme_ext.h"
 #include "../include/rtl8188e_dm.h"
-#include "../include/rtl8188e_sreset.h"
 
 /*
 Caller and the rtw_cmd_thread can protect cmd_q by spin_lock.
@@ -51,7 +50,6 @@ static int _rtw_init_cmd_priv(struct cmd_priv *pcmdpriv)
 
 	pcmdpriv->rsp_buf = pcmdpriv->rsp_allocated_buf  +  4 - ((size_t)(pcmdpriv->rsp_allocated_buf) & 3);
 
-	pcmdpriv->cmd_issued_cnt = 0;
 	pcmdpriv->cmd_done_cnt = 0;
 	pcmdpriv->rsp_cnt = 0;
 exit:
@@ -269,8 +267,6 @@ _next:
 			pcmd->res = H2C_DROPPED;
 			goto post_process;
 		}
-
-		pcmdpriv->cmd_issued_cnt++;
 
 		pcmd->cmdsz = _RND4((pcmd->cmdsz));/* _RND4 */
 
@@ -948,6 +944,18 @@ static void traffic_status_watchdog(struct adapter *padapter)
 	pmlmepriv->LinkDetectInfo.bHigherBusyTraffic = bHigherBusyTraffic;
 	pmlmepriv->LinkDetectInfo.bHigherBusyRxTraffic = bHigherBusyRxTraffic;
 	pmlmepriv->LinkDetectInfo.bHigherBusyTxTraffic = bHigherBusyTxTraffic;
+}
+
+static void rtl8188e_sreset_xmit_status_check(struct adapter *padapter)
+{
+	u32 txdma_status;
+
+	txdma_status = rtw_read32(padapter, REG_TXDMA_STATUS);
+	if (txdma_status != 0x00) {
+		DBG_88E("%s REG_TXDMA_STATUS:0x%08x\n", __func__, txdma_status);
+		rtw_write32(padapter, REG_TXDMA_STATUS, txdma_status);
+	}
+	/* total xmit irp = 4 */
 }
 
 static void dynamic_chk_wk_hdl(struct adapter *padapter, u8 *pbuf)

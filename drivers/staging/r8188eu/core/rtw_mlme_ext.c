@@ -10,7 +10,6 @@
 #include "../include/wlan_bssdef.h"
 #include "../include/mlme_osdep.h"
 #include "../include/recv_osdep.h"
-#include "../include/rtl8188e_sreset.h"
 #include "../include/rtl8188e_xmit.h"
 #include "../include/rtl8188e_dm.h"
 
@@ -77,7 +76,7 @@ unsigned char	MCS_rate_1R[16] = {0xff, 0x00, 0x0, 0x0, 0x01, 0x0, 0x0, 0x0, 0x0,
 /********************************************************
 ChannelPlan definitions
 *********************************************************/
-static struct rt_channel_plan_2g RTW_ChannelPlan2G[RT_CHANNEL_DOMAIN_2G_MAX] = {
+static struct rt_channel_plan RTW_ChannelPlan2G[RT_CHANNEL_DOMAIN_2G_MAX] = {
 	{{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13}, 13},		/*  0x00, RT_CHANNEL_DOMAIN_2G_WORLD , Passive scan CH 12, 13 */
 	{{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13}, 13},		/*  0x01, RT_CHANNEL_DOMAIN_2G_ETSI1 */
 	{{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11}, 11},			/*  0x02, RT_CHANNEL_DOMAIN_2G_FCC1 */
@@ -7125,8 +7124,7 @@ void mlmeext_sta_del_event_callback(struct adapter *padapter)
 Following are the functions for the timer handlers
 
 *****************************************************************************/
-void _linked_rx_signal_strehgth_display(struct adapter *padapter);
-void _linked_rx_signal_strehgth_display(struct adapter *padapter)
+static void _linked_rx_signal_strength_display(struct adapter *padapter)
 {
 	struct mlme_ext_priv    *pmlmeext = &padapter->mlmeextpriv;
 	struct mlme_ext_info    *pmlmeinfo = &pmlmeext->mlmext_info;
@@ -7160,6 +7158,23 @@ static u8 chk_ap_is_alive(struct adapter *padapter, struct sta_info *psta)
 	return ret;
 }
 
+static void rtl8188e_sreset_linked_status_check(struct adapter *padapter)
+{
+	u32 rx_dma_status =  rtw_read32(padapter, REG_RXDMA_STATUS);
+	u8 fw_status;
+
+	if (rx_dma_status != 0x00) {
+		DBG_88E("%s REG_RXDMA_STATUS:0x%08x\n", __func__, rx_dma_status);
+		rtw_write32(padapter, REG_RXDMA_STATUS, rx_dma_status);
+	}
+
+	fw_status = rtw_read8(padapter, REG_FMETHR);
+	if (fw_status == 1)
+		DBG_88E("%s REG_FW_STATUS (0x%02x), Read_Efuse_Fail !!\n", __func__, fw_status);
+	else if (fw_status == 2)
+		DBG_88E("%s REG_FW_STATUS (0x%02x), Condition_No_Match !!\n", __func__, fw_status);
+}
+
 void linked_status_chk(struct adapter *padapter)
 {
 	u32	i;
@@ -7170,7 +7185,7 @@ void linked_status_chk(struct adapter *padapter)
 	struct sta_priv		*pstapriv = &padapter->stapriv;
 
 	if (padapter->bRxRSSIDisplay)
-		_linked_rx_signal_strehgth_display(padapter);
+		_linked_rx_signal_strength_display(padapter);
 
 	rtl8188e_sreset_linked_status_check(padapter);
 

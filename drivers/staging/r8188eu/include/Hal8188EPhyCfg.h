@@ -4,26 +4,7 @@
 #ifndef __INC_HAL8188EPHYCFG_H__
 #define __INC_HAL8188EPHYCFG_H__
 
-/*--------------------------Define Parameters-------------------------------*/
-#define LOOP_LIMIT			5
-#define MAX_STALL_TIME			50		/* us */
-#define AntennaDiversityValue		0x80
-#define MAX_TXPWR_IDX_NMODE_92S		63
-#define Reset_Cnt_Limit			3
-
 #define MAX_AGGR_NUM			0x07
-
-/*--------------------------Define Parameters-------------------------------*/
-
-/*------------------------------Define structure----------------------------*/
-
-enum hw90_block {
-	HW90_BLOCK_MAC = 0,
-	HW90_BLOCK_PHY0 = 1,
-	HW90_BLOCK_PHY1 = 2,
-	HW90_BLOCK_RF = 3,
-	HW90_BLOCK_MAXIMUM = 4, /*  Never use this */
-};
 
 enum rf_radio_path {
 	RF_PATH_A = 0,			/* Radio Path A */
@@ -39,7 +20,6 @@ enum rf_radio_path {
 #define MAX_CHNL_GROUP_24G		6	/*  ch1~2, ch3~5, ch6~8,
 						 *ch9~11, ch12~13, CH 14
 						 * total three groups */
-#define CHANNEL_GROUP_MAX_88E		6
 
 struct bb_reg_def {
 	u32 rfintfs;		/*  set software control: */
@@ -89,18 +69,7 @@ struct bb_reg_def {
 				 * Path A and B */
 };
 
-/*------------------------------Define structure----------------------------*/
-
-/*------------------------Export global variable----------------------------*/
-/*------------------------Export global variable----------------------------*/
-
-/*------------------------Export Marco Definition---------------------------*/
-/*------------------------Export Marco Definition---------------------------*/
-
-/*--------------------------Exported Function prototype---------------------*/
-/*  */
 /*  BB and RF register read/write */
-/*  */
 u32 rtl8188e_PHY_QueryBBReg(struct adapter *adapter, u32 regaddr, u32 mask);
 void rtl8188e_PHY_SetBBReg(struct adapter *Adapter, u32 RegAddr,
 			   u32 mask, u32 data);
@@ -127,6 +96,5 @@ void PHY_SwChnl8188E(struct adapter *adapter, u8 channel);
 
 void storePwrIndexDiffRateOffset(struct adapter *adapter, u32 regaddr,
 				 u32 mask, u32 data);
-/*--------------------------Exported Function prototype---------------------*/
 
-#endif	/*  __INC_HAL8192CPHYCFG_H */
+#endif

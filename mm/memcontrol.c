@@ -1375,6 +1375,7 @@ static const struct memory_stat memory_stats[] = {
 	{ "pagetables",			NR_PAGETABLE			},
 	{ "percpu",			MEMCG_PERCPU_B			},
 	{ "sock",			MEMCG_SOCK			},
+	{ "vmalloc",			MEMCG_VMALLOC			},
 	{ "shmem",			NR_SHMEM			},
 	{ "file_mapped",		NR_FILE_MAPPED			},
 	{ "file_dirty",			NR_FILE_DIRTY			},
@@ -2881,31 +2882,29 @@ struct mem_cgroup *mem_cgroup_from_obj(void *p)
 	/*
 	 * Slab objects are accounted individually, not per-page.
 	 * Memcg membership data for each individual object is saved in
-	 * the page->obj_cgroups.
+	 * slab->memcg_data.
 	 */
 	if (folio_test_slab(folio)) {
 		struct obj_cgroup **objcgs;
-		struct obj_cgroup *objcg;
 		struct slab *slab;
 		unsigned int off;
 
 		slab = folio_slab(folio);
-		objcgs = slab_objcgs_check(slab);
+		objcgs = slab_objcgs(slab);
 		if (!objcgs)
 			return NULL;
 
 		off = obj_to_index(slab->slab_cache, slab, p);
-		objcg = objcgs[off];
-		if (objcg)
-			return obj_cgroup_memcg(objcg);
+		if (objcgs[off])
+			return obj_cgroup_memcg(objcgs[off]);
 
 		return NULL;
 	}
 
 	/*
-	 * page_memcg_check() is used here, because page_has_obj_cgroups()
-	 * check above could fail because the object cgroups vector wasn't set
-	 * at that moment, but it can be set concurrently.
+	 * page_memcg_check() is used here, because in theory we can encounter
+	 * a folio where the slab flag has been cleared already, but
+	 * slab->memcg_data has not been freed yet
 	 * page_memcg_check(page) will guarantee that a proper memory
 	 * cgroup pointer or NULL will be returned.
 	 */
@@ -5129,15 +5128,11 @@ static void mem_cgroup_free(struct mem_cgroup *memcg)
 static struct mem_cgroup *mem_cgroup_alloc(void)
 {
 	struct mem_cgroup *memcg;
-	unsigned int size;
 	int node;
 	int __maybe_unused i;
 	long error = -ENOMEM;
 
-	size = sizeof(struct mem_cgroup);
-	size += nr_node_ids * sizeof(struct mem_cgroup_per_node *);
-
-	memcg = kzalloc(size, GFP_KERNEL);
+	memcg = kzalloc(struct_size(memcg, nodeinfo, nr_node_ids), GFP_KERNEL);
 	if (!memcg)
 		return ERR_PTR(error);
 

@@ -32,6 +32,7 @@
 #include <linux/security.h>
 #include <linux/ctype.h>
 #include <linux/kmemleak.h>
+#include <linux/filter.h>
 #include <linux/fs.h>
 #include <linux/init.h>
 #include <linux/kernel.h>
@@ -95,9 +96,6 @@
 
 /* Constants used for minimum and  maximum */
 
-#ifdef CONFIG_PRINTK
-static const int ten_thousand = 10000;
-#endif
 #ifdef CONFIG_PERF_EVENTS
 static const int six_hundred_forty_kb = 640 * 1024;
 #endif
@@ -1147,10 +1145,11 @@ static int __do_proc_doulongvec_minmax(void *data, struct ctl_table *table,
 			err = proc_get_long(&p, &left, &val, &neg,
 					     proc_wspace_sep,
 					     sizeof(proc_wspace_sep), NULL);
-			if (err)
+			if (err || neg) {
+				err = -EINVAL;
 				break;
-			if (neg)
-				continue;
+			}
+
 			val = convmul * val / convdiv;
 			if ((min && val < *min) || (max && val > *max)) {
 				err = -EINVAL;

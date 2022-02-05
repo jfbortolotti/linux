@@ -21,6 +21,22 @@
 	};
 };
 
+&wifi0 {
+	brcm,board-type = "apple,santorini";
+};
+
+/*
+ * Provide labels for the USB type C ports.
+ */
+
+&typec0 {
+	label = "USB-C Back-right";
+};
+
+&typec1 {
+	label = "USB-C Back-left";
+};
+
 /*
  * Provide labels for the USB type C ports.
  */

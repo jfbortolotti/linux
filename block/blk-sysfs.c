@@ -791,10 +791,10 @@ static void blk_release_queue(struct kobject *kobj)
 		blk_stat_remove_callback(q, q->poll_cb);
 	blk_stat_free_callback(q->poll_cb);
 
+	blk_exit_queue(q);
+
 	blk_free_queue_stats(q->stats);
 	kfree(q->poll_stat);
-
-	blk_exit_queue(q);
 
 	blk_queue_free_zone_bitmaps(q);
 
@@ -810,6 +810,9 @@ static void blk_release_queue(struct kobject *kobj)
 		blk_mq_debugfs_unregister(q);
 
 	bioset_exit(&q->bio_split);
+
+	if (blk_queue_has_srcu(q))
+		cleanup_srcu_struct(q->srcu);
 
 	ida_simple_remove(&blk_queue_ida, q->id);
 	call_rcu(&q->rcu_head, blk_free_queue_rcu);
@@ -887,7 +890,6 @@ int blk_register_queue(struct gendisk *disk)
 		kobject_uevent(&q->elevator->kobj, KOBJ_ADD);
 	mutex_unlock(&q->sysfs_lock);
 
-	ret = 0;
 unlock:
 	mutex_unlock(&q->sysfs_dir_lock);
 

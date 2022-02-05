@@ -3939,14 +3939,14 @@ struct ieee80211_prep_tx_info {
  *	twt structure.
  * @twt_teardown_request: Update the hw with TWT teardown request received
  *	from the peer.
- * @set_radar_offchan: Configure dedicated offchannel chain available for
+ * @set_radar_background: Configure dedicated offchannel chain available for
  *	radar/CAC detection on some hw. This chain can't be used to transmit
  *	or receive frames and it is bounded to a running wdev.
- *	Offchannel radar/CAC detection allows to avoid the CAC downtime
+ *	Background radar/CAC detection allows to avoid the CAC downtime
  *	switching to a different channel during CAC detection on the selected
  *	radar channel.
  *	The caller is expected to set chandef pointer to NULL in order to
- *	disable offchannel CAC/radar detection.
+ *	disable background CAC/radar detection.
  * @net_fill_forward_path: Called from .ndo_fill_forward_path in order to
  *	resolve a path for hardware flow offloading
  */
@@ -4277,8 +4277,8 @@ struct ieee80211_ops {
 			      struct ieee80211_twt_setup *twt);
 	void (*twt_teardown_request)(struct ieee80211_hw *hw,
 				     struct ieee80211_sta *sta, u8 flowid);
-	int (*set_radar_offchan)(struct ieee80211_hw *hw,
-				 struct cfg80211_chan_def *chandef);
+	int (*set_radar_background)(struct ieee80211_hw *hw,
+				    struct cfg80211_chan_def *chandef);
 	int (*net_fill_forward_path)(struct ieee80211_hw *hw,
 				     struct ieee80211_vif *vif,
 				     struct ieee80211_sta *sta,
@@ -5614,6 +5614,9 @@ void ieee80211_iterate_active_interfaces_atomic(struct ieee80211_hw *hw,
  * This function iterates over the interfaces associated with a given
  * hardware that are currently active and calls the callback for them.
  * This version can only be used while holding the wiphy mutex.
+ * The driver must not call this with a lock held that it can also take in
+ * response to callbacks from mac80211, and it must not call this within
+ * callbacks made by mac80211 - both would result in deadlocks.
  *
  * @hw: the hardware struct of which the interfaces should be iterated over
  * @iter_flags: iteration flags, see &enum ieee80211_interface_iteration_flags
@@ -5626,6 +5629,24 @@ void ieee80211_iterate_active_interfaces_mtx(struct ieee80211_hw *hw,
 						u8 *mac,
 						struct ieee80211_vif *vif),
 					     void *data);
+
+/**
+ * ieee80211_iterate_stations - iterate stations
+ *
+ * This function iterates over all stations associated with a given
+ * hardware that are currently uploaded to the driver and calls the callback
+ * function for them.
+ * This function allows the iterator function to sleep, when the iterator
+ * function is atomic @ieee80211_iterate_stations_atomic can be used.
+ *
+ * @hw: the hardware struct of which the interfaces should be iterated over
+ * @iterator: the iterator function to call, cannot sleep
+ * @data: first argument of the iterator function
+ */
+void ieee80211_iterate_stations(struct ieee80211_hw *hw,
+				void (*iterator)(void *data,
+						 struct ieee80211_sta *sta),
+				void *data);
 
 /**
  * ieee80211_iterate_stations_atomic - iterate stations
@@ -6074,6 +6095,18 @@ void ieee80211_radar_detected(struct ieee80211_hw *hw);
  * and wake up the suspended queues.
  */
 void ieee80211_chswitch_done(struct ieee80211_vif *vif, bool success);
+
+/**
+ * ieee80211_channel_switch_disconnect - disconnect due to channel switch error
+ * @vif &struct ieee80211_vif pointer from the add_interface callback.
+ * @block_tx: if %true, do not send deauth frame.
+ *
+ * Instruct mac80211 to disconnect due to a channel switch error. The channel
+ * switch can request to block the tx and so, we need to make sure we do not send
+ * a deauth frame in this case.
+ */
+void ieee80211_channel_switch_disconnect(struct ieee80211_vif *vif,
+					 bool block_tx);
 
 /**
  * ieee80211_request_smps - request SM PS transition

@@ -29,12 +29,6 @@ export	TEXTADDR
 # If we have a machine-specific directory, then include it in the build.
 libs-y				+= arch/nds32/lib/
 
-ifneq '$(CONFIG_NDS32_BUILTIN_DTB)' '""'
-BUILTIN_DTB := y
-else
-BUILTIN_DTB := n
-endif
-
 ifdef CONFIG_CPU_LITTLE_ENDIAN
 KBUILD_CFLAGS   += $(call cc-option, -EL)
 KBUILD_AFLAGS   += $(call cc-option, -EL)

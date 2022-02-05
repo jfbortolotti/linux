@@ -24,12 +24,12 @@ Linux PCI总线子系统
    pci
    pciebus-howto
    pci-iov-howto
+   msi-howto
+   sysfs-pci
+
 
 Todolist:
 
-
-   msi-howto
-   sysfs-pci
    acpi-info
    pci-error-recovery
    pcieaer-howto

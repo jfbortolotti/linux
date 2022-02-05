@@ -97,7 +97,8 @@ volume it wants to access::
 	struct fscache_volume *
 	fscache_acquire_volume(const char *volume_key,
 			       const char *cache_name,
-			       u64 coherency_data);
+			       const void *coherency_data,
+			       size_t coherency_len);
 
 This function creates a volume cookie with the specified volume key as its name
 and notes the coherency data.
@@ -113,7 +114,9 @@ of that name if it is online or comes online.  If no cache name is specified,
 it will use the first cache that comes to hand and set the name to that.
 
 The specified coherency data is stored in the cookie and will be matched
-against coherency data stored on disk.
+against coherency data stored on disk.  The data pointer may be NULL if no data
+is provided.  If the coherency data doesn't match, the entire cache volume will
+be invalidated.
 
 This function can return errors such as EBUSY if the volume key is already in
 use by an acquired volume or ENOMEM if an allocation failure occured.  It may
@@ -126,12 +129,14 @@ When the network filesystem has finished with a volume, it should relinquish it
 by calling::
 
 	void fscache_relinquish_volume(struct fscache_volume *volume,
-				       u64 coherency_data,
+				       const void *coherency_data,
 				       bool invalidate);
 
 This will cause the volume to be committed or removed, and if sealed the
-coherency data will be set to the value supplied.  Note that all data cookies
-obtained in this volume must be relinquished before the volume is relinquished.
+coherency data will be set to the value supplied.  The amount of coherency data
+must match the length specified when the volume was acquired.  Note that all
+data cookies obtained in this volume must be relinquished before the volume is
+relinquished.
 
 
 Data File Registration

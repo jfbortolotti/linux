@@ -13,7 +13,17 @@ This section explains how to fetch the tools needed for building.
 
 Some of these requirements might be available from Linux distributions
 under names like ``rustc``, ``rust-src``, ``rust-bindgen``, etc. However,
-at the time of writing, they are likely not to be recent enough.
+at the time of writing, they are likely not to be recent enough unless
+the distribution tracks the latest releases.
+
+To easily check whether the requirements are met, the following target
+can be used::
+
+	make LLVM=1 rustavailable
+
+This triggers the same logic used by Kconfig to determine whether
+``RUST_IS_AVAILABLE`` should be enabled; but it also explains why not
+if that is the case.
 
 
 rustc
@@ -26,7 +36,7 @@ Rust features.
 If ``rustup`` is being used, enter the checked out source code directory
 and run::
 
-	rustup override set 1.57.0
+	rustup override set $(scripts/min-tool-version.sh rustc)
 
 Otherwise, fetch a standalone installer or install ``rustup`` from:
 
@@ -43,10 +53,19 @@ If ``rustup`` is being used, run::
 
 	rustup component add rust-src
 
+The components are installed per toolchain, thus upgrading the Rust compiler
+version later on requires re-adding the component.
+
 Otherwise, if a standalone installer is used, the Rust repository may be cloned
 into the installation folder of the toolchain::
 
-	git clone --recurse-submodules https://github.com/rust-lang/rust $(rustc --print sysroot)/lib/rustlib/src/rust
+	git clone --recurse-submodules \
+		--branch $(scripts/min-tool-version.sh rustc) \
+		https://github.com/rust-lang/rust \
+		$(rustc --print sysroot)/lib/rustlib/src/rust
+
+In this case, upgrading the Rust compiler version later on requires manually
+updating this clone.
 
 
 libclang
@@ -67,8 +86,8 @@ Otherwise, building LLVM takes quite a while, but it is not a complex process:
 
 	https://llvm.org/docs/GettingStarted.html#getting-the-source-code-and-building-llvm
 
-See Documentation/kbuild/llvm.rst for more information and further ways
-to fetch pre-built releases and distribution packages.
+See :ref:`Documentation/kbuild/llvm.rst <kbuild_llvm>` for more information and
+further ways to fetch pre-built releases and distribution packages.
 
 
 bindgen
@@ -79,7 +98,7 @@ the ``bindgen`` tool. A particular version is required.
 
 Install it via (note that this will download and build the tool from source)::
 
-	cargo install --locked --version 0.56.0 bindgen
+	cargo install --locked --version $(scripts/min-tool-version.sh bindgen) bindgen
 
 
 Requirements: Developing
@@ -94,7 +113,7 @@ rustfmt
 
 The ``rustfmt`` tool is used to automatically format all the Rust kernel code,
 including the generated C bindings (for details, please see
-:ref:`Documentation/rust/coding.rst <rust_coding>`).
+:ref:`Documentation/rust/coding-guidelines.rst <rust_coding_guidelines>`).
 
 If ``rustup`` is being used, its ``default`` profile already installs the tool,
 thus nothing needs to be done. If another profile is being used, the component
@@ -110,7 +129,7 @@ clippy
 
 ``clippy`` is a Rust linter. Running it provides extra warnings for Rust code.
 It can be run by passing ``CLIPPY=1`` to ``make`` (for details, please see
-:ref:`Documentation/rust/coding.rst <rust_coding>`).
+:ref:`Documentation/rust/general-information.rst <rust_general_information>`).
 
 If ``rustup`` is being used, its ``default`` profile already installs the tool,
 thus nothing needs to be done. If another profile is being used, the component
@@ -140,7 +159,7 @@ rustdoc
 
 ``rustdoc`` is the documentation tool for Rust. It generates pretty HTML
 documentation for Rust code (for details, please see
-:ref:`Documentation/rust/docs.rst <rust_docs>`).
+:ref:`Documentation/rust/general-information.rst <rust_general_information>`).
 
 ``rustdoc`` is also used to test the examples provided in documented Rust code
 (called doctests or documentation tests). The ``rusttest`` Make target uses
@@ -167,8 +186,8 @@ Configuration
 -------------
 
 ``Rust support`` (``CONFIG_RUST``) needs to be enabled in the ``General setup``
-menu. The option is only shown if the build system can locate ``rustc``.
-In turn, this will make visible the rest of options that depend on Rust.
+menu. The option is only shown if a suitable Rust toolchain is found (see
+above). In turn, this will make visible the rest of options that depend on Rust.
 
 Afterwards, go to::
 

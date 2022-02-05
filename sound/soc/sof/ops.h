@@ -274,7 +274,7 @@ snd_sof_dsp_set_power_state(struct snd_sof_dev *sdev,
 }
 
 /* debug */
-void snd_sof_dsp_dbg_dump(struct snd_sof_dev *sdev, u32 flags);
+void snd_sof_dsp_dbg_dump(struct snd_sof_dev *sdev, const char *msg, u32 flags);
 
 static inline int snd_sof_debugfs_add_region_item(struct snd_sof_dev *sdev,
 		enum snd_sof_fw_blk_type blk_type, u32 offset, size_t size,
@@ -557,15 +557,17 @@ snd_sof_machine_unregister(struct snd_sof_dev *sdev, void *pdata)
 		sof_ops(sdev)->machine_unregister(sdev, pdata);
 }
 
-static inline void
+static inline struct snd_soc_acpi_mach *
 snd_sof_machine_select(struct snd_sof_dev *sdev)
 {
 	if (sof_ops(sdev) && sof_ops(sdev)->machine_select)
-		sof_ops(sdev)->machine_select(sdev);
+		return sof_ops(sdev)->machine_select(sdev);
+
+	return NULL;
 }
 
 static inline void
-snd_sof_set_mach_params(const struct snd_soc_acpi_mach *mach,
+snd_sof_set_mach_params(struct snd_soc_acpi_mach *mach,
 			struct snd_sof_dev *sdev)
 {
 	if (sof_ops(sdev) && sof_ops(sdev)->set_mach_params)
@@ -641,5 +643,5 @@ int snd_sof_dsp_register_poll(struct snd_sof_dev *sdev, u32 bar, u32 offset,
 			      u32 mask, u32 target, u32 timeout_ms,
 			      u32 interval_us);
 
-void snd_sof_dsp_panic(struct snd_sof_dev *sdev, u32 offset);
+void snd_sof_dsp_panic(struct snd_sof_dev *sdev, u32 offset, bool non_recoverable);
 #endif

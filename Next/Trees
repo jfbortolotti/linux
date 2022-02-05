@@ -21,8 +21,7 @@ bpf		git	git://git.kernel.org/pub/scm/linux/kernel/git/bpf/bpf.git#master
 ipsec		git	git://git.kernel.org/pub/scm/linux/kernel/git/klassert/ipsec.git#master
 netfilter	git	git://git.kernel.org/pub/scm/linux/kernel/git/pablo/nf.git#master
 ipvs		git	git://git.kernel.org/pub/scm/linux/kernel/git/horms/ipvs.git#master
-wireless-drivers	git	git://git.kernel.org/pub/scm/linux/kernel/git/kvalo/wireless-drivers.git#master
-mac80211	git	git://git.kernel.org/pub/scm/linux/kernel/git/jberg/mac80211.git#master
+wireless	git	git git://git.kernel.org/pub/scm/linux/kernel/git/wireless/wireless.git#main
 rdma-fixes	git	git://git.kernel.org/pub/scm/linux/kernel/git/rdma/rdma.git#for-rc
 sound-current	git	git://git.kernel.org/pub/scm/linux/kernel/git/tiwai/sound.git#for-linus
 sound-asoc-fixes	git	git://git.kernel.org/pub/scm/linux/kernel/git/broonie/sound.git#for-linus
@@ -173,8 +172,7 @@ jfs		git	git://github.com/kleikamp/linux-shaggy.git#jfs-next
 ksmbd		git	https://github.com/smfrench/smb3-kernel.git#ksmbd-for-next
 nfs		git	git://git.linux-nfs.org/projects/trondmy/nfs-2.6.git#linux-next
 nfs-anna	git	git://git.linux-nfs.org/projects/anna/linux-nfs.git#linux-next
-nfsd		git	git://git.linux-nfs.org/~bfields/linux.git#nfsd-next
-cel		git	git://git.kernel.org/pub/scm/linux/kernel/git/cel/linux#for-next
+nfsd		git	git://git.kernel.org/pub/scm/linux/kernel/git/cel/linux#for-next
 ntfs3		git	https://github.com/Paragon-Software-Group/linux-ntfs3.git#master
 orangefs	git	git://git.kernel.org/pub/scm/linux/kernel/git/hubcap/linux#for-next
 overlayfs	git	git://git.kernel.org/pub/scm/linux/kernel/git/mszeredi/vfs.git#overlayfs-next
@@ -212,9 +210,8 @@ ipsec-next	git	git://git.kernel.org/pub/scm/linux/kernel/git/klassert/ipsec-next
 mlx5-next	git	git://git.kernel.org/pub/scm/linux/kernel/git/mellanox/linux.git#mlx5-next
 netfilter-next	git	git://git.kernel.org/pub/scm/linux/kernel/git/pablo/nf-next.git#master
 ipvs-next	git	git://git.kernel.org/pub/scm/linux/kernel/git/horms/ipvs-next.git#master
-wireless-drivers-next	git	git://git.kernel.org/pub/scm/linux/kernel/git/kvalo/wireless-drivers-next.git#master
 bluetooth	git	git://git.kernel.org/pub/scm/linux/kernel/git/bluetooth/bluetooth-next.git#master
-mac80211-next	git	git://git.kernel.org/pub/scm/linux/kernel/git/jberg/mac80211-next.git#master
+wireless-next	git	git git://git.kernel.org/pub/scm/linux/kernel/git/wireless/wireless-next.git#main
 mtd		git	git://git.kernel.org/pub/scm/linux/kernel/git/mtd/linux.git#mtd/next
 nand		git	git://git.kernel.org/pub/scm/linux/kernel/git/mtd/linux.git#nand/next
 spi-nor		git	git://git.kernel.org/pub/scm/linux/kernel/git/mtd/linux.git#spi-nor/next
@@ -228,6 +225,7 @@ drm-tegra	git	git://anongit.freedesktop.org/tegra/linux.git#drm/tegra/for-next
 drm-msm		git	https://gitlab.freedesktop.org/drm/msm.git#msm-next
 imx-drm		git	https://git.pengutronix.de/git/pza/linux#imx-drm/next
 etnaviv		git	https://git.pengutronix.de/git/lst/linux#etnaviv/next
+fbdev		git	git://git.kernel.org/pub/scm/linux/kernel/git/deller/linux-fbdev.git#for-next
 regmap		git	git://git.kernel.org/pub/scm/linux/kernel/git/broonie/regmap.git#for-next
 sound		git	git://git.kernel.org/pub/scm/linux/kernel/git/tiwai/sound.git#for-next
 sound-asoc	git	git://git.kernel.org/pub/scm/linux/kernel/git/broonie/sound.git#for-next
@@ -282,6 +280,7 @@ usb-chipidea-next	git	git://git.kernel.org/pub/scm/linux/kernel/git/peter.chen/u
 tty		git	git://git.kernel.org/pub/scm/linux/kernel/git/gregkh/tty.git#tty-next
 char-misc	git	git://git.kernel.org/pub/scm/linux/kernel/git/gregkh/char-misc.git#char-misc-next
 extcon		git	git://git.kernel.org/pub/scm/linux/kernel/git/chanwoo/extcon.git#extcon-next
+gnss		git	git://git.kernel.org/pub/scm/linux/kernel/git/johan/gnss.git#gnss-next
 phy-next	git	git://git.kernel.org/pub/scm/linux/kernel/git/phy/linux-phy.git#next
 soundwire	git	git://git.kernel.org/pub/scm/linux/kernel/git/vkoul/soundwire.git#next
 thunderbolt	git	git://git.kernel.org/pub/scm/linux/kernel/git/westeri/thunderbolt.git#next
@@ -318,7 +317,6 @@ seccomp		git	git://git.kernel.org/pub/scm/linux/kernel/git/kees/linux.git#for-ne
 kspp		git	git://git.kernel.org/pub/scm/linux/kernel/git/kees/linux.git#for-next/kspp
 kspp-gustavo	git	git://git.kernel.org/pub/scm/linux/kernel/git/gustavoars/linux.git#for-next/kspp
 cisco		git	https://github.com/daniel-walker/cisco-linux.git#for-next
-gnss		git	git://git.kernel.org/pub/scm/linux/kernel/git/johan/gnss.git#gnss-next
 fsi		git	git://git.kernel.org/pub/scm/linux/kernel/git/joel/fsi.git#next
 slimbus		git	git://git.kernel.org/pub/scm/linux/kernel/git/srini/slimbus.git#for-next
 nvmem		git	git://git.kernel.org/pub/scm/linux/kernel/git/srini/nvmem.git#for-next
@@ -339,11 +337,13 @@ counters	git	git://git.kernel.org/pub/scm/linux/kernel/git/shuah/linux.git#count
 rust		git	https://github.com/Rust-for-Linux/linux.git#rust-next
 cxl		git	git://git.kernel.org/pub/scm/linux/kernel/git/cxl/cxl.git#next
 folio		git	git://git.infradead.org/users/willy/pagecache.git#for-next
+folio-iomap	git	git://git.infradead.org/users/willy/linux.git#folio-iomap
 bitmap		git	https://guthub.com/norov/linux.git#bitmap-master-5.15
 zstd		git	https://github.com/terrelln/linux.git#zstd-next
 efi		git	git://git.kernel.org/pub/scm/linux/kernel/git/efi/efi.git#next
 unicode		git	git://git.kernel.org/pub/scm/linux/kernel/git/krisman/unicode.git#for-next
-slab		git	git://git.kernel.org/pub/scm/linux/kernel/git/vbabka/linux.git#slab-next
+slab		git	git://git.kernel.org/pub/scm/linux/kernel/git/vbabka/slab.git#for-next
 random		git	git://git.kernel.org/pub/scm/linux/kernel/git/crng/random.git#master
+landlock	git	git://git.kernel.org/pub/scm/linux/kernel/git/mic/linux.git#next
 akpm-current	mmotm	https://www.ozlabs.org/~akpm/mmotm/
 akpm		mmotm	https://www.ozlabs.org/~akpm/mmotm/

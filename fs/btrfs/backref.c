@@ -1049,12 +1049,12 @@ static int add_inline_refs(const struct btrfs_fs_info *fs_info,
  *
  * Returns 0 on success, <0 on error, or BACKREF_FOUND_SHARED.
  */
-static int add_keyed_refs(struct btrfs_fs_info *fs_info,
+static int add_keyed_refs(struct btrfs_root *extent_root,
 			  struct btrfs_path *path, u64 bytenr,
 			  int info_level, struct preftrees *preftrees,
 			  struct share_check *sc)
 {
-	struct btrfs_root *extent_root = fs_info->extent_root;
+	struct btrfs_fs_info *fs_info = extent_root->fs_info;
 	int ret;
 	int slot;
 	struct extent_buffer *leaf;
@@ -1170,6 +1170,7 @@ static int find_parent_nodes(struct btrfs_trans_handle *trans,
 			     struct ulist *roots, const u64 *extent_item_pos,
 			     struct share_check *sc, bool ignore_offset)
 {
+	struct btrfs_root *root = btrfs_extent_root(fs_info, bytenr);
 	struct btrfs_key key;
 	struct btrfs_path *path;
 	struct btrfs_delayed_ref_root *delayed_refs = NULL;
@@ -1203,28 +1204,26 @@ static int find_parent_nodes(struct btrfs_trans_handle *trans,
 	if (time_seq == BTRFS_SEQ_LAST)
 		path->skip_locking = 1;
 
-	/*
-	 * grab both a lock on the path and a lock on the delayed ref head.
-	 * We need both to get a consistent picture of how the refs look
-	 * at a specified point in time
-	 */
 again:
 	head = NULL;
 
-	ret = btrfs_search_slot(NULL, fs_info->extent_root, &key, path, 0, 0);
+	ret = btrfs_search_slot(NULL, root, &key, path, 0, 0);
 	if (ret < 0)
 		goto out;
-	BUG_ON(ret == 0);
+	if (ret == 0) {
+		/* This shouldn't happen, indicates a bug or fs corruption. */
+		ASSERT(ret != 0);
+		ret = -EUCLEAN;
+		goto out;
+	}
 
-#ifdef CONFIG_BTRFS_FS_RUN_SANITY_TESTS
 	if (trans && likely(trans->type != __TRANS_DUMMY) &&
 	    time_seq != BTRFS_SEQ_LAST) {
-#else
-	if (trans && time_seq != BTRFS_SEQ_LAST) {
-#endif
 		/*
-		 * look if there are updates for this ref queued and lock the
-		 * head
+		 * We have a specific time_seq we care about and trans which
+		 * means we have the path lock, we need to grab the ref head and
+		 * lock it so we have a consistent view of the refs at the given
+		 * time.
 		 */
 		delayed_refs = &trans->transaction->delayed_refs;
 		spin_lock(&delayed_refs->lock);
@@ -1271,7 +1270,7 @@ again:
 					      &info_level, &preftrees, sc);
 			if (ret)
 				goto out;
-			ret = add_keyed_refs(fs_info, path, bytenr, info_level,
+			ret = add_keyed_refs(root, path, bytenr, info_level,
 					     &preftrees, sc);
 			if (ret)
 				goto out;
@@ -1360,10 +1359,18 @@ again:
 				goto out;
 			if (!ret && extent_item_pos) {
 				/*
-				 * we've recorded that parent, so we must extend
-				 * its inode list here
+				 * We've recorded that parent, so we must extend
+				 * its inode list here.
+				 *
+				 * However if there was corruption we may not
+				 * have found an eie, return an error in this
+				 * case.
 				 */
-				BUG_ON(!eie);
+				ASSERT(eie);
+				if (!eie) {
+					ret = -EUCLEAN;
+					goto out;
+				}
 				while (eie->next)
 					eie = eie->next;
 				eie->next = ref->inode_list;
@@ -1740,6 +1747,7 @@ int extent_from_logical(struct btrfs_fs_info *fs_info, u64 logical,
 			struct btrfs_path *path, struct btrfs_key *found_key,
 			u64 *flags_ret)
 {
+	struct btrfs_root *extent_root = btrfs_extent_root(fs_info, logical);
 	int ret;
 	u64 flags;
 	u64 size = 0;
@@ -1755,11 +1763,11 @@ int extent_from_logical(struct btrfs_fs_info *fs_info, u64 logical,
 	key.objectid = logical;
 	key.offset = (u64)-1;
 
-	ret = btrfs_search_slot(NULL, fs_info->extent_root, &key, path, 0, 0);
+	ret = btrfs_search_slot(NULL, extent_root, &key, path, 0, 0);
 	if (ret < 0)
 		return ret;
 
-	ret = btrfs_previous_extent_item(fs_info->extent_root, path, 0);
+	ret = btrfs_previous_extent_item(extent_root, path, 0);
 	if (ret) {
 		if (ret > 0)
 			ret = -ENOENT;
@@ -1962,7 +1970,7 @@ int iterate_extent_inodes(struct btrfs_fs_info *fs_info,
 			extent_item_objectid);
 
 	if (!search_commit_root) {
-		trans = btrfs_attach_transaction(fs_info->extent_root);
+		trans = btrfs_attach_transaction(fs_info->tree_root);
 		if (IS_ERR(trans)) {
 			if (PTR_ERR(trans) != -ENOENT &&
 			    PTR_ERR(trans) != -EROFS)
@@ -2328,6 +2336,7 @@ struct btrfs_backref_iter *btrfs_backref_iter_alloc(
 int btrfs_backref_iter_start(struct btrfs_backref_iter *iter, u64 bytenr)
 {
 	struct btrfs_fs_info *fs_info = iter->fs_info;
+	struct btrfs_root *extent_root = btrfs_extent_root(fs_info, bytenr);
 	struct btrfs_path *path = iter->path;
 	struct btrfs_extent_item *ei;
 	struct btrfs_key key;
@@ -2338,7 +2347,7 @@ int btrfs_backref_iter_start(struct btrfs_backref_iter *iter, u64 bytenr)
 	key.offset = (u64)-1;
 	iter->bytenr = bytenr;
 
-	ret = btrfs_search_slot(NULL, fs_info->extent_root, &key, path, 0, 0);
+	ret = btrfs_search_slot(NULL, extent_root, &key, path, 0, 0);
 	if (ret < 0)
 		return ret;
 	if (ret == 0) {
@@ -2381,7 +2390,7 @@ int btrfs_backref_iter_start(struct btrfs_backref_iter *iter, u64 bytenr)
 
 	/* If there is no inline backref, go search for keyed backref */
 	if (iter->cur_ptr >= iter->end_ptr) {
-		ret = btrfs_next_item(fs_info->extent_root, path);
+		ret = btrfs_next_item(extent_root, path);
 
 		/* No inline nor keyed ref */
 		if (ret > 0) {
@@ -2425,6 +2434,7 @@ release:
 int btrfs_backref_iter_next(struct btrfs_backref_iter *iter)
 {
 	struct extent_buffer *eb = btrfs_backref_get_eb(iter);
+	struct btrfs_root *extent_root;
 	struct btrfs_path *path = iter->path;
 	struct btrfs_extent_inline_ref *iref;
 	int ret;
@@ -2455,7 +2465,8 @@ int btrfs_backref_iter_next(struct btrfs_backref_iter *iter)
 	}
 
 	/* We're at keyed items, there is no inline item, go to the next one */
-	ret = btrfs_next_item(iter->fs_info->extent_root, iter->path);
+	extent_root = btrfs_extent_root(iter->fs_info, iter->bytenr);
+	ret = btrfs_next_item(extent_root, iter->path);
 	if (ret)
 		return ret;
 

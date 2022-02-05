@@ -127,7 +127,7 @@ impl<T> Ref<T> {
     /// # Safety
     ///
     /// `encoded` must have been returned by a previous call to [`Ref::into_usize`]. Additionally,
-    /// it can only be called once for each previous call to [``Ref::into_usize`].
+    /// it can only be called once for each previous call to [`Ref::into_usize`].
     pub unsafe fn from_usize(encoded: usize) -> Self {
         // SAFETY: By the safety invariants we know that `encoded` came from `Ref::into_usize`, so
         // the reference count held then will be owned by the new `Ref` object.
@@ -172,7 +172,7 @@ impl<T: ?Sized> Ref<T> {
     /// # Safety
     ///
     /// `ptr` must have been returned by a previous call to [`Ref::into_raw`]. Additionally, it
-    /// can only be called once for each previous call to [``Ref::into_raw`].
+    /// can only be called once for each previous call to [`Ref::into_raw`].
     pub unsafe fn from_raw(ptr: *const T) -> Self {
         // SAFETY: The safety requirement ensures that the pointer is valid.
         let align = core::mem::align_of_val(unsafe { &*ptr });

@@ -39,7 +39,6 @@
 #include <linux/log2.h>
 #include <linux/crc16.h>
 #include <linux/dax.h>
-#include <linux/cleancache.h>
 #include <linux/uaccess.h>
 #include <linux/iversion.h>
 #include <linux/unicode.h>
@@ -279,8 +278,8 @@ static int ext4_verify_csum_type(struct super_block *sb,
 	return es->s_checksum_type == EXT4_CRC32C_CHKSUM;
 }
 
-static __le32 ext4_superblock_csum(struct super_block *sb,
-				   struct ext4_super_block *es)
+__le32 ext4_superblock_csum(struct super_block *sb,
+			    struct ext4_super_block *es)
 {
 	struct ext4_sb_info *sbi = EXT4_SB(sb);
 	int offset = offsetof(struct ext4_super_block, s_checksum);
@@ -1703,8 +1702,7 @@ enum {
 	Opt_usrquota, Opt_grpquota, Opt_prjquota, Opt_i_version,
 	Opt_dax, Opt_dax_always, Opt_dax_inode, Opt_dax_never,
 	Opt_stripe, Opt_delalloc, Opt_nodelalloc, Opt_warn_on_error,
-	Opt_nowarn_on_error, Opt_mblk_io_submit,
-	Opt_lazytime, Opt_nolazytime, Opt_debug_want_extra_isize,
+	Opt_nowarn_on_error, Opt_mblk_io_submit, Opt_debug_want_extra_isize,
 	Opt_nomblk_io_submit, Opt_block_validity, Opt_noblock_validity,
 	Opt_inode_readahead_blks, Opt_journal_ioprio,
 	Opt_dioread_nolock, Opt_dioread_lock,
@@ -1818,8 +1816,6 @@ static const struct fs_parameter_spec ext4_param_specs[] = {
 	fsparam_flag	("nodelalloc",		Opt_nodelalloc),
 	fsparam_flag	("warn_on_error",	Opt_warn_on_error),
 	fsparam_flag	("nowarn_on_error",	Opt_nowarn_on_error),
-	fsparam_flag	("lazytime",		Opt_lazytime),
-	fsparam_flag	("nolazytime",		Opt_nolazytime),
 	fsparam_u32	("debug_want_extra_isize",
 						Opt_debug_want_extra_isize),
 	fsparam_flag	("mblk_io_submit",	Opt_removed),
@@ -2077,7 +2073,7 @@ static void ext4_fc_free(struct fs_context *fc)
 
 int ext4_init_fs_context(struct fs_context *fc)
 {
-	struct xfs_fs_context	*ctx;
+	struct ext4_fs_context *ctx;
 
 	ctx = kzalloc(sizeof(struct ext4_fs_context), GFP_KERNEL);
 	if (!ctx)
@@ -2148,19 +2144,22 @@ static int unnote_qf_name(struct fs_context *fc, int qtype)
 #endif
 
 #define EXT4_SET_CTX(name)						\
-static inline void ctx_set_##name(struct ext4_fs_context *ctx, int flag)\
+static inline void ctx_set_##name(struct ext4_fs_context *ctx,		\
+				  unsigned long flag)			\
 {									\
 	ctx->mask_s_##name |= flag;					\
 	ctx->vals_s_##name |= flag;					\
 }									\
-static inline void ctx_clear_##name(struct ext4_fs_context *ctx, int flag)\
+static inline void ctx_clear_##name(struct ext4_fs_context *ctx,	\
+				    unsigned long flag)			\
 {									\
 	ctx->mask_s_##name |= flag;					\
 	ctx->vals_s_##name &= ~flag;					\
 }									\
-static inline bool ctx_test_##name(struct ext4_fs_context *ctx, int flag)\
+static inline unsigned long						\
+ctx_test_##name(struct ext4_fs_context *ctx, unsigned long flag)	\
 {									\
-	return ((ctx->vals_s_##name & flag) != 0);			\
+	return (ctx->vals_s_##name & flag);				\
 }									\
 
 EXT4_SET_CTX(flags);
@@ -2239,13 +2238,9 @@ static int ext4_parse_param(struct fs_context *fc, struct fs_parameter *param)
 		ctx_set_mount_flags(ctx, EXT4_MF_FS_ABORTED);
 		return 0;
 	case Opt_i_version:
+		ext4_msg(NULL, KERN_WARNING, deprecated_msg, param->key, "5.20");
+		ext4_msg(NULL, KERN_WARNING, "Use iversion instead\n");
 		ctx_set_flags(ctx, SB_I_VERSION);
-		return 0;
-	case Opt_lazytime:
-		ctx_set_flags(ctx, SB_LAZYTIME);
-		return 0;
-	case Opt_nolazytime:
-		ctx_clear_flags(ctx, SB_LAZYTIME);
 		return 0;
 	case Opt_inlinecrypt:
 #ifdef CONFIG_FS_ENCRYPTION_INLINE_CRYPT
@@ -2632,10 +2627,13 @@ static void ext4_apply_quota_options(struct fs_context *fc,
 				continue;
 
 			qname = ctx->s_qf_names[i]; /* May be NULL */
+			if (qname)
+				set_opt(sb, QUOTA);
 			ctx->s_qf_names[i] = NULL;
-			kfree(sbi->s_qf_names[i]);
-			rcu_assign_pointer(sbi->s_qf_names[i], qname);
-			set_opt(sb, QUOTA);
+			qname = rcu_replace_pointer(sbi->s_qf_names[i], qname,
+						lockdep_is_held(&sb->s_umount));
+			if (qname)
+				kfree_rcu(qname);
 		}
 	}
 
@@ -2688,7 +2686,7 @@ static int ext4_check_quota_consistency(struct fs_context *fc,
 				goto err_jquota_change;
 
 			if (sbi->s_qf_names[i] && ctx->s_qf_names[i] &&
-			    strcmp(sbi->s_qf_names[i],
+			    strcmp(get_qf_name(sb, sbi, i),
 				   ctx->s_qf_names[i]) != 0)
 				goto err_jquota_specified;
 		}
@@ -2821,7 +2819,8 @@ static int ext4_check_opt_consistency(struct fs_context *fc,
 				 "Remounting file system with no journal "
 				 "so ignoring journalled data option");
 			ctx_clear_mount_opt(ctx, EXT4_MOUNT_DATA_FLAGS);
-		} else if (ctx->mask_s_mount_opt & EXT4_MOUNT_DATA_FLAGS) {
+		} else if (ctx_test_mount_opt(ctx, EXT4_MOUNT_DATA_FLAGS) !=
+			   test_opt(sb, DATA_FLAGS)) {
 			ext4_msg(NULL, KERN_ERR, "Cannot change data mode "
 				 "on remount");
 			return -EINVAL;
@@ -2872,6 +2871,14 @@ static int ext4_apply_options(struct fs_context *fc, struct super_block *sb)
 	sbi->s_mount_flags |= ctx->vals_s_mount_flags;
 	sb->s_flags &= ~ctx->mask_s_flags;
 	sb->s_flags |= ctx->vals_s_flags;
+
+	/*
+	 * i_version differs from common mount option iversion so we have
+	 * to let vfs know that it was set, otherwise it would get cleared
+	 * on remount
+	 */
+	if (ctx->mask_s_flags & SB_I_VERSION)
+		fc->sb_flags |= SB_I_VERSION;
 
 #define APPLY(X) ({ if (ctx->spec & EXT4_SPEC_##X) sbi->X = ctx->X; })
 	APPLY(s_commit_interval);
@@ -3141,8 +3148,6 @@ done:
 			EXT4_BLOCKS_PER_GROUP(sb),
 			EXT4_INODES_PER_GROUP(sb),
 			sbi->s_mount_opt, sbi->s_mount_opt2);
-
-	cleancache_init_fs(sb);
 	return err;
 }
 
@@ -4323,7 +4328,7 @@ static struct ext4_sb_info *ext4_alloc_sbi(struct super_block *sb)
 	if (!sbi)
 		return NULL;
 
-	sbi->s_daxdev = fs_dax_get_by_bdev(sb->s_bdev);
+	sbi->s_daxdev = fs_dax_get_by_bdev(sb->s_bdev, &sbi->s_dax_part_off);
 
 	sbi->s_blockgroup_lock =
 		kzalloc(sizeof(struct blockgroup_lock), GFP_KERNEL);
@@ -4340,8 +4345,7 @@ err_out:
 	return NULL;
 }
 
-static int __ext4_fill_super(struct fs_context *fc, struct super_block *sb,
-			     int silent)
+static int __ext4_fill_super(struct fs_context *fc, struct super_block *sb)
 {
 	struct buffer_head *bh, **group_desc;
 	struct ext4_super_block *es = NULL;
@@ -4361,6 +4365,7 @@ static int __ext4_fill_super(struct fs_context *fc, struct super_block *sb,
 	int err = 0;
 	ext4_group_t first_not_zeroed;
 	struct ext4_fs_context *ctx = fc->fs_private;
+	int silent = fc->sb_flags & SB_SILENT;
 
 	/* Set defaults for the variables that will be set during parsing */
 	ctx->journal_ioprio = DEFAULT_JOURNAL_IOPRIO;
@@ -4747,9 +4752,12 @@ static int __ext4_fill_super(struct fs_context *fc, struct super_block *sb,
 		goto failed_mount;
 	}
 
-	if (dax_supported(sbi->s_daxdev, sb->s_bdev, blocksize, 0,
-			bdev_nr_sectors(sb->s_bdev)))
-		set_bit(EXT4_FLAGS_BDEV_IS_DAX, &sbi->s_ext4_flags);
+	if (sbi->s_daxdev) {
+		if (blocksize == PAGE_SIZE)
+			set_bit(EXT4_FLAGS_BDEV_IS_DAX, &sbi->s_ext4_flags);
+		else
+			ext4_msg(sb, KERN_ERR, "unsupported blocksize for DAX\n");
+	}
 
 	if (sbi->s_mount_opt & EXT4_MOUNT_DAX_ALWAYS) {
 		if (ext4_has_feature_inline_data(sb)) {
@@ -5068,7 +5076,6 @@ static int __ext4_fill_super(struct fs_context *fc, struct super_block *sb,
 
 	/* Initialize fast commit stuff */
 	atomic_set(&sbi->s_fc_subtid, 0);
-	atomic_set(&sbi->s_fc_ineligible_updates, 0);
 	INIT_LIST_HEAD(&sbi->s_fc_q[FC_Q_MAIN]);
 	INIT_LIST_HEAD(&sbi->s_fc_q[FC_Q_STAGING]);
 	INIT_LIST_HEAD(&sbi->s_fc_dentry_q[FC_Q_MAIN]);
@@ -5544,7 +5551,7 @@ static int ext4_fill_super(struct super_block *sb, struct fs_context *fc)
 	if (ctx->spec & EXT4_SPEC_s_sb_block)
 		sbi->s_sb_block = ctx->s_sb_block;
 
-	ret = __ext4_fill_super(fc, sb, fc->sb_flags & SB_SILENT);
+	ret = __ext4_fill_super(fc, sb);
 	if (ret < 0)
 		goto free_sbi;
 
@@ -6203,13 +6210,12 @@ struct ext4_mount_options {
 #endif
 };
 
-static int __ext4_remount(struct fs_context *fc, struct super_block *sb,
-			  int *flags)
+static int __ext4_remount(struct fs_context *fc, struct super_block *sb)
 {
 	struct ext4_fs_context *ctx = fc->fs_private;
 	struct ext4_super_block *es;
 	struct ext4_sb_info *sbi = EXT4_SB(sb);
-	unsigned long old_sb_flags, vfs_flags;
+	unsigned long old_sb_flags;
 	struct ext4_mount_options old_opts;
 	ext4_group_t g;
 	int err = 0;
@@ -6248,14 +6254,6 @@ static int __ext4_remount(struct fs_context *fc, struct super_block *sb,
 	if (sbi->s_journal && sbi->s_journal->j_task->io_context)
 		ctx->journal_ioprio =
 			sbi->s_journal->j_task->io_context->ioprio;
-
-	/*
-	 * Some options can be enabled by ext4 and/or by VFS mount flag
-	 * either way we need to make sure it matches in both *flags and
-	 * s_flags. Copy those selected flags from *flags to s_flags
-	 */
-	vfs_flags = SB_LAZYTIME | SB_I_VERSION;
-	sb->s_flags = (sb->s_flags & ~vfs_flags) | (*flags & vfs_flags);
 
 	ext4_apply_options(fc, sb);
 
@@ -6310,13 +6308,13 @@ static int __ext4_remount(struct fs_context *fc, struct super_block *sb,
 	/* Flush outstanding errors before changing fs state */
 	flush_work(&sbi->s_error_work);
 
-	if ((bool)(*flags & SB_RDONLY) != sb_rdonly(sb)) {
+	if ((bool)(fc->sb_flags & SB_RDONLY) != sb_rdonly(sb)) {
 		if (ext4_test_mount_flag(sb, EXT4_MF_FS_ABORTED)) {
 			err = -EROFS;
 			goto restore_opts;
 		}
 
-		if (*flags & SB_RDONLY) {
+		if (fc->sb_flags & SB_RDONLY) {
 			err = sync_filesystem(sb);
 			if (err < 0)
 				goto restore_opts;
@@ -6464,13 +6462,6 @@ static int __ext4_remount(struct fs_context *fc, struct super_block *sb,
 	if (!ext4_has_feature_mmp(sb) || sb_rdonly(sb))
 		ext4_stop_mmpd(sbi);
 
-	/*
-	 * Some options can be enabled by ext4 and/or by VFS mount flag
-	 * either way we need to make sure it matches in both *flags and
-	 * s_flags. Copy those selected flags from s_flags to *flags
-	 */
-	*flags = (*flags & ~vfs_flags) | (sb->s_flags & vfs_flags);
-
 	return 0;
 
 restore_opts:
@@ -6502,7 +6493,6 @@ restore_opts:
 static int ext4_reconfigure(struct fs_context *fc)
 {
 	struct super_block *sb = fc->root->d_sb;
-	int flags = fc->sb_flags;
 	int ret;
 
 	fc->s_fs_info = EXT4_SB(sb);
@@ -6511,7 +6501,7 @@ static int ext4_reconfigure(struct fs_context *fc)
 	if (ret < 0)
 		return ret;
 
-	ret = __ext4_remount(fc, sb, &flags);
+	ret = __ext4_remount(fc, sb);
 	if (ret < 0)
 		return ret;
 
@@ -6761,10 +6751,7 @@ static int ext4_quota_on(struct super_block *sb, int type, int format_id,
 
 	lockdep_set_quota_inode(path->dentry->d_inode, I_DATA_SEM_QUOTA);
 	err = dquot_quota_on(sb, type, format_id, path);
-	if (err) {
-		lockdep_set_quota_inode(path->dentry->d_inode,
-					     I_DATA_SEM_NORMAL);
-	} else {
+	if (!err) {
 		struct inode *inode = d_inode(path->dentry);
 		handle_t *handle;
 
@@ -6784,7 +6771,12 @@ static int ext4_quota_on(struct super_block *sb, int type, int format_id,
 		ext4_journal_stop(handle);
 	unlock_inode:
 		inode_unlock(inode);
+		if (err)
+			dquot_quota_off(sb, type);
 	}
+	if (err)
+		lockdep_set_quota_inode(path->dentry->d_inode,
+					     I_DATA_SEM_NORMAL);
 	return err;
 }
 
@@ -6847,8 +6839,19 @@ int ext4_enable_quotas(struct super_block *sb)
 					"Failed to enable quota tracking "
 					"(type=%d, err=%d). Please run "
 					"e2fsck to fix.", type, err);
-				for (type--; type >= 0; type--)
+				for (type--; type >= 0; type--) {
+					struct inode *inode;
+
+					inode = sb_dqopt(sb)->files[type];
+					if (inode)
+						inode = igrab(inode);
 					dquot_quota_off(sb, type);
+					if (inode) {
+						lockdep_set_quota_inode(inode,
+							I_DATA_SEM_NORMAL);
+						iput(inode);
+					}
+				}
 
 				return err;
 			}
@@ -6952,7 +6955,7 @@ static ssize_t ext4_quota_write(struct super_block *sb, int type,
 	struct buffer_head *bh;
 	handle_t *handle = journal_current_handle();
 
-	if (EXT4_SB(sb)->s_journal && !handle) {
+	if (!handle) {
 		ext4_msg(sb, KERN_WARNING, "Quota write (off=%llu, len=%llu)"
 			" cancelled because transaction is not started",
 			(unsigned long long)off, (unsigned long long)len);
@@ -7130,6 +7133,7 @@ static int __init ext4_init_fs(void)
 out:
 	unregister_as_ext2();
 	unregister_as_ext3();
+	ext4_fc_destroy_dentry_cache();
 out05:
 	destroy_inodecache();
 out1:
@@ -7156,6 +7160,7 @@ static void __exit ext4_exit_fs(void)
 	unregister_as_ext2();
 	unregister_as_ext3();
 	unregister_filesystem(&ext4_fs_type);
+	ext4_fc_destroy_dentry_cache();
 	destroy_inodecache();
 	ext4_exit_mballoc();
 	ext4_exit_sysfs();

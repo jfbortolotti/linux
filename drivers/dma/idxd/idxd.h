@@ -70,7 +70,6 @@ extern struct idxd_device_driver idxd_user_drv;
 
 #define INVALID_INT_HANDLE	-1
 struct idxd_irq_entry {
-	struct idxd_device *idxd;
 	int id;
 	int vector;
 	struct llist_head pending_llist;
@@ -81,7 +80,6 @@ struct idxd_irq_entry {
 	 */
 	spinlock_t list_lock;
 	int int_handle;
-	struct idxd_wq *wq;
 	ioasid_t pasid;
 };
 
@@ -92,9 +90,9 @@ struct idxd_group {
 	int id;
 	int num_engines;
 	int num_wqs;
-	bool use_token_limit;
-	u8 tokens_allowed;
-	u8 tokens_reserved;
+	bool use_rdbuf_limit;
+	u8 rdbufs_allowed;
+	u8 rdbufs_reserved;
 	int tc_a;
 	int tc_b;
 };
@@ -185,7 +183,7 @@ struct idxd_wq {
 	struct wait_queue_head err_queue;
 	struct idxd_device *idxd;
 	int id;
-	struct idxd_irq_entry *ie;
+	struct idxd_irq_entry ie;
 	enum idxd_wq_type type;
 	struct idxd_group *group;
 	int client_count;
@@ -266,6 +264,7 @@ struct idxd_device {
 	int id;
 	int major;
 	u32 cmd_status;
+	struct idxd_irq_entry ie;	/* misc irq, msix 0 */
 
 	struct pci_dev *pdev;
 	void __iomem *reg_base;
@@ -293,17 +292,15 @@ struct idxd_device {
 	u32 max_batch_size;
 	int max_groups;
 	int max_engines;
-	int max_tokens;
+	int max_rdbufs;
 	int max_wqs;
 	int max_wq_size;
-	int token_limit;
-	int nr_tokens;		/* non-reserved tokens */
+	int rdbuf_limit;
+	int nr_rdbufs;		/* non-reserved read buffers */
 	unsigned int wqcfg_size;
 
 	union sw_err_reg sw_err;
 	wait_queue_head_t cmd_waitq;
-	int num_wq_irqs;
-	struct idxd_irq_entry *irq_entries;
 
 	struct idxd_dma_dev *idxd_dma;
 	struct workqueue_struct *wq;
@@ -393,6 +390,21 @@ static inline void idxd_dev_set_type(struct idxd_dev *idev, int type)
 	}
 
 	idev->type = type;
+}
+
+static inline struct idxd_irq_entry *idxd_get_ie(struct idxd_device *idxd, int idx)
+{
+	return (idx == 0) ? &idxd->ie : &idxd->wqs[idx - 1]->ie;
+}
+
+static inline struct idxd_wq *ie_to_wq(struct idxd_irq_entry *ie)
+{
+	return container_of(ie, struct idxd_wq, ie);
+}
+
+static inline struct idxd_device *ie_to_idxd(struct idxd_irq_entry *ie)
+{
+	return container_of(ie, struct idxd_device, ie);
 }
 
 extern struct bus_type dsa_bus_type;
@@ -536,15 +548,10 @@ void idxd_wqs_quiesce(struct idxd_device *idxd);
 bool idxd_queue_int_handle_resubmit(struct idxd_desc *desc);
 
 /* device interrupt control */
-void idxd_msix_perm_setup(struct idxd_device *idxd);
-void idxd_msix_perm_clear(struct idxd_device *idxd);
 irqreturn_t idxd_misc_thread(int vec, void *data);
 irqreturn_t idxd_wq_thread(int irq, void *data);
 void idxd_mask_error_interrupts(struct idxd_device *idxd);
 void idxd_unmask_error_interrupts(struct idxd_device *idxd);
-void idxd_mask_msix_vectors(struct idxd_device *idxd);
-void idxd_mask_msix_vector(struct idxd_device *idxd, int vec_id);
-void idxd_unmask_msix_vector(struct idxd_device *idxd, int vec_id);
 
 /* device control */
 int idxd_register_idxd_drv(void);
@@ -583,6 +590,8 @@ int idxd_wq_disable_pasid(struct idxd_wq *wq);
 void __idxd_wq_quiesce(struct idxd_wq *wq);
 void idxd_wq_quiesce(struct idxd_wq *wq);
 int idxd_wq_init_percpu_ref(struct idxd_wq *wq);
+void idxd_wq_free_irq(struct idxd_wq *wq);
+int idxd_wq_request_irq(struct idxd_wq *wq);
 
 /* submission */
 int idxd_submit_desc(struct idxd_wq *wq, struct idxd_desc *desc);

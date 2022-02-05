@@ -1,38 +1,49 @@
 // SPDX-License-Identifier: GPL-2.0
 
-//! Amba devices drivers.
+//! Amba devices and drivers.
 //!
 //! C header: [`include/linux/amba/bus.h`](../../../../include/linux/amba/bus.h)
 
 use crate::{
     bindings, c_types, device, driver, error::from_kernel_result, io_mem::Resource, power,
-    str::CStr, to_result, types::PointerWrapper, Error, Result,
+    str::CStr, to_result, types::PointerWrapper, Result, ThisModule,
 };
-use core::{marker::PhantomData, ops::Deref};
 
 /// A registration of an amba driver.
 pub type Registration<T> = driver::Registration<Adapter<T>>;
 
 /// Id of an Amba device.
-pub struct DeviceId<T = ()> {
+#[derive(Clone, Copy)]
+pub struct DeviceId {
     /// Device id.
     pub id: u32,
 
     /// Mask that identifies which bits are valid in the device id.
     pub mask: u32,
+}
 
-    /// Context data to be associated with the device id. This is carried over to [`Driver::probe`]
-    /// so that drivers can encode any information they may need then.
-    pub data: T,
+// SAFETY: `ZERO` is all zeroed-out and `to_rawid` stores `offset` in `amba_id::data`.
+unsafe impl const driver::RawDeviceId for DeviceId {
+    type RawType = bindings::amba_id;
+    const ZERO: Self::RawType = bindings::amba_id {
+        id: 0,
+        mask: 0,
+        data: core::ptr::null_mut(),
+    };
+
+    fn to_rawid(&self, offset: isize) -> Self::RawType {
+        bindings::amba_id {
+            id: self.id,
+            mask: self.mask,
+            data: offset as _,
+        }
+    }
 }
 
 /// An amba driver.
-pub trait Driver
-where
-    <Self::Data as Deref>::Target: driver::DeviceRemoval,
-{
+pub trait Driver {
     /// Data stored on device by driver.
-    type Data: PointerWrapper + Send + Sync + Deref;
+    type Data: PointerWrapper + Send + Sync + driver::DeviceRemoval = ();
 
     /// The type that implements the power-management operations.
     ///
@@ -43,11 +54,11 @@ where
     /// The type holding information about each device id supported by the driver.
     type IdInfo: 'static = ();
 
-    /// The table of device ids supported by the drivers.
-    const ID_TABLE: &'static [DeviceId<Self::IdInfo>];
+    /// The table of device ids supported by the driver.
+    const ID_TABLE: Option<driver::IdTable<'static, DeviceId, Self::IdInfo>> = None;
 
     /// Probes for the device with the given id.
-    fn probe(dev: &mut Device, id: &DeviceId<Self::IdInfo>) -> Result<Self::Data>;
+    fn probe(dev: &mut Device, id_info: Option<&Self::IdInfo>) -> Result<Self::Data>;
 
     /// Cleans any resources up that are associated with the device.
     ///
@@ -56,31 +67,26 @@ where
 }
 
 /// An adapter for the registration of Amba drivers.
-pub struct Adapter<T: Driver>(PhantomData<T>)
-where
-    <T::Data as Deref>::Target: driver::DeviceRemoval;
+pub struct Adapter<T: Driver>(T);
 
-impl<T: Driver> driver::DriverOps for Adapter<T>
-where
-    <T::Data as Deref>::Target: driver::DeviceRemoval,
-{
+impl<T: Driver> driver::DriverOps for Adapter<T> {
     type RegType = bindings::amba_driver;
-    type RawIdType = bindings::amba_id;
-    type IdType = DeviceId<T::IdInfo>;
-    const ID_TABLE: &'static [Self::IdType] = T::ID_TABLE;
 
     unsafe fn register(
         reg: *mut bindings::amba_driver,
         name: &'static CStr,
-        id_table: *const bindings::amba_id,
+        module: &'static ThisModule,
     ) -> Result {
         // SAFETY: By the safety requirements of this function (defined in the trait defintion),
         // `reg` is non-null and valid.
         let amba = unsafe { &mut *reg };
         amba.drv.name = name.as_char_ptr();
-        amba.id_table = id_table;
+        amba.drv.owner = module.0;
         amba.probe = Some(probe_callback::<T>);
         amba.remove = Some(remove_callback::<T>);
+        if let Some(t) = T::ID_TABLE {
+            amba.id_table = t.as_ref();
+        }
         if cfg!(CONFIG_PM) {
             // SAFETY: `probe_callback` sets the driver data after calling `T::Data::into_pointer`,
             // and we guarantee that `T::Data` is the same as `T::PowerOps::Data` by a constraint
@@ -97,33 +103,29 @@ where
         // `reg` was passed (and updated) by a previous successful call to `amba_driver_register`.
         unsafe { bindings::amba_driver_unregister(reg) };
     }
-
-    fn to_raw_id(index: usize, id: &Self::IdType) -> Self::RawIdType {
-        bindings::amba_id {
-            id: id.id,
-            mask: id.mask,
-            data: index as _,
-        }
-    }
 }
 
 unsafe extern "C" fn probe_callback<T: Driver>(
     adev: *mut bindings::amba_device,
     aid: *const bindings::amba_id,
-) -> c_types::c_int
-where
-    <T::Data as Deref>::Target: driver::DeviceRemoval,
-{
+) -> c_types::c_int {
     from_kernel_result! {
         // SAFETY: `adev` is valid by the contract with the C code. `dev` is alive only for the
         // duration of this call, so it is guaranteed to remain alive for the lifetime of `dev`.
         let mut dev = unsafe { Device::from_ptr(adev) };
         // SAFETY: `aid` is valid by the requirements the contract with the C code.
-        let index = unsafe { (*aid).data } as usize;
-        if index >= T::ID_TABLE.len() {
-            return Err(Error::ENXIO);
-        }
-        let data = T::probe(&mut dev, &T::ID_TABLE[index])?;
+        let offset = unsafe { (*aid).data };
+        let info = if offset.is_null() {
+            None
+        } else {
+            // SAFETY: The offset comes from a previous call to `offset_from` in `IdArray::new`,
+            // which guarantees that the resulting pointer is within the table.
+            let ptr = unsafe { aid.cast::<u8>().offset(offset as _).cast::<Option<T::IdInfo>>() };
+            // SAFETY: The id table has a static lifetime, so `ptr` is guaranteed to be valid for
+            // read.
+            unsafe { (&*ptr).as_ref() }
+        };
+        let data = T::probe(&mut dev, info)?;
         let ptr = T::Data::into_pointer(data);
         // SAFETY: `adev` is valid for write by the contract with the C code.
         unsafe { bindings::amba_set_drvdata(adev, ptr as _) };
@@ -131,10 +133,7 @@ where
     }
 }
 
-unsafe extern "C" fn remove_callback<T: Driver>(adev: *mut bindings::amba_device)
-where
-    <T::Data as Deref>::Target: driver::DeviceRemoval,
-{
+unsafe extern "C" fn remove_callback<T: Driver>(adev: *mut bindings::amba_device) {
     // SAFETY: `adev` is valid by the contract with the C code.
     let ptr = unsafe { bindings::amba_get_drvdata(adev) };
     // SAFETY: The value returned by `amba_get_drvdata` was stored by a previous call to
@@ -142,7 +141,7 @@ where
     // `T::Data::into_pointer`.
     let data = unsafe { T::Data::from_pointer(ptr) };
     T::remove(&data);
-    <<T::Data as Deref>::Target as driver::DeviceRemoval>::device_remove(data.deref());
+    <T::Data as driver::DeviceRemoval>::device_remove(&data);
 }
 
 /// An Amba device.
@@ -206,22 +205,17 @@ unsafe impl device::RawDevice for Device {
 ///
 /// ```ignore
 /// # use kernel::prelude::*;
-/// # use kernel::{amba, declare_amba_id_table, module_amba_driver};
+/// # use kernel::{amba, define_amba_id_table, module_amba_driver};
 /// #
-/// # struct State;
-/// # impl kernel::driver::DeviceRemoval for State {
-/// #   fn device_remove(&self) {}
-/// # }
 /// struct MyDriver;
 /// impl amba::Driver for MyDriver {
 ///     // [...]
-/// #   type Data = kernel::sync::Ref<State>;
-/// #   fn probe(dev: &mut amba::Device, id: &amba::DeviceId<Self::IdInfo>) -> Result<Self::Data> {
-/// #     todo!()
+/// #   fn probe(_dev: &mut amba::Device, _id: Option<&Self::IdInfo>) -> Result {
+/// #       Ok(())
 /// #   }
-/// #   declare_amba_id_table! [
-/// #       { id: 0x00041061, mask: 0x000fffff, data: () },
-/// #   ];
+/// #   define_amba_id_table! {(), [
+/// #       ({ id: 0x00041061, mask: 0x000fffff }, None),
+/// #   ]}
 /// }
 ///
 /// module_amba_driver! {
@@ -238,39 +232,28 @@ macro_rules! module_amba_driver {
     };
 }
 
-/// Declares the id table for amba devices.
+/// Defines the id table for amba devices.
 ///
 /// # Examples
 ///
 /// ```
 /// # use kernel::prelude::*;
-/// # use kernel::{amba, declare_amba_id_table};
+/// # use kernel::{amba, define_amba_id_table};
 /// #
-/// # struct State;
-/// # impl kernel::driver::DeviceRemoval for State {
-/// #   fn device_remove(&self) {}
-/// # }
 /// # struct Sample;
 /// # impl kernel::amba::Driver for Sample {
-/// #   type Data = kernel::sync::Ref<State>;
-/// #   fn probe(dev: &mut amba::Device, id: &amba::DeviceId<Self::IdInfo>) -> Result<Self::Data> {
-/// #     todo!()
+/// #   fn probe(_dev: &mut amba::Device, _id: Option<&Self::IdInfo>) -> Result {
+/// #       Ok(())
 /// #   }
-///     declare_amba_id_table! [
-///         { id: 0x00041061, mask: 0x000fffff, data: () },
-///     ];
+///     define_amba_id_table! {(), [
+///         ({ id: 0x00041061, mask: 0x000fffff }, None),
+///     ]}
 /// # }
 /// ```
 #[macro_export]
-macro_rules! declare_amba_id_table {
-    ($({$($entry:tt)*},)*) => {
-        const ID_TABLE: &'static [$crate::amba::DeviceId<Self::IdInfo>] = &[
-            $( $crate::amba::DeviceId { $($entry)* },)*
-        ];
+macro_rules! define_amba_id_table {
+    ($data_type:ty, $($t:tt)*) => {
+        type IdInfo = $data_type;
+        $crate::define_id_table!(ID_TABLE, $crate::amba::DeviceId, $data_type, $($t)*);
     };
-
-    // Cover case without a trailing comma.
-    ($(($($entry:tt)*)),*) => {
-        $crate::declare_amba_id_table!{ $({$($entry)*},)*}
-    }
 }

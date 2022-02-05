@@ -643,10 +643,10 @@ static const struct {
 		INITRD_EVENT_TAG_ID,
 		sizeof("Linux initrd"),
 	},
-	"Linux initrd",
+	{ "Linux initrd" },
 };
 
-void efi_measure_initrd(unsigned long load_addr, unsigned long load_size)
+static void efi_measure_initrd(unsigned long load_addr, unsigned long load_size)
 {
 	efi_guid_t tcg2_guid = EFI_TCG2_PROTOCOL_GUID;
 	efi_tcg2_protocol_t *tcg2 = NULL;

@@ -257,6 +257,7 @@ static int search_csum_tree(struct btrfs_fs_info *fs_info,
 			    struct btrfs_path *path, u64 disk_bytenr,
 			    u64 len, u8 *dst)
 {
+	struct btrfs_root *csum_root;
 	struct btrfs_csum_item *item = NULL;
 	struct btrfs_key key;
 	const u32 sectorsize = fs_info->sectorsize;
@@ -285,7 +286,8 @@ static int search_csum_tree(struct btrfs_fs_info *fs_info,
 
 	/* Current item doesn't contain the desired range, search again */
 	btrfs_release_path(path);
-	item = btrfs_lookup_csum(NULL, fs_info->csum_root, path, disk_bytenr, 0);
+	csum_root = btrfs_csum_root(fs_info, disk_bytenr);
+	item = btrfs_lookup_csum(NULL, csum_root, path, disk_bytenr, 0);
 	if (IS_ERR(item)) {
 		ret = PTR_ERR(item);
 		goto out;
@@ -376,7 +378,8 @@ blk_status_t btrfs_lookup_bio_sums(struct inode *inode, struct bio *bio, u8 *dst
 	const unsigned int nblocks = orig_len >> fs_info->sectorsize_bits;
 	int count = 0;
 
-	if (!fs_info->csum_root || (BTRFS_I(inode)->flags & BTRFS_INODE_NODATASUM))
+	if ((BTRFS_I(inode)->flags & BTRFS_INODE_NODATASUM) ||
+	    test_bit(BTRFS_FS_STATE_NO_CSUMS, &fs_info->fs_state))
 		return BLK_STS_OK;
 
 	/*
@@ -801,7 +804,7 @@ int btrfs_del_csums(struct btrfs_trans_handle *trans,
 	const u32 csum_size = fs_info->csum_size;
 	u32 blocksize_bits = fs_info->sectorsize_bits;
 
-	ASSERT(root == fs_info->csum_root ||
+	ASSERT(root->root_key.objectid == BTRFS_CSUM_TREE_OBJECTID ||
 	       root->root_key.objectid == BTRFS_TREE_LOG_OBJECTID);
 
 	path = btrfs_alloc_path();

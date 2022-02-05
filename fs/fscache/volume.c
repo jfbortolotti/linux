@@ -119,20 +119,18 @@ void fscache_end_volume_access(struct fscache_volume *volume,
 }
 EXPORT_SYMBOL(fscache_end_volume_access);
 
-static long fscache_compare_volume(const struct fscache_volume *a,
-				   const struct fscache_volume *b)
+static bool fscache_volume_same(const struct fscache_volume *a,
+				const struct fscache_volume *b)
 {
 	size_t klen;
 
-	if (a->key_hash != b->key_hash)
-		return (long)a->key_hash - (long)b->key_hash;
-	if (a->cache != b->cache)
-		return (long)a->cache    - (long)b->cache;
-	if (a->key[0] != b->key[0])
-		return (long)a->key[0]   - (long)b->key[0];
+	if (a->key_hash	!= b->key_hash ||
+	    a->cache	!= b->cache ||
+	    a->key[0]	!= b->key[0])
+		return false;
 
-	klen = round_up(a->key[0] + 1, sizeof(unsigned int));
-	return memcmp(a->key, b->key, klen);
+	klen = round_up(a->key[0] + 1, sizeof(__le32));
+	return memcmp(a->key, b->key, klen) == 0;
 }
 
 static bool fscache_is_acquire_pending(struct fscache_volume *volume)
@@ -170,7 +168,7 @@ static bool fscache_hash_volume(struct fscache_volume *candidate)
 
 	hlist_bl_lock(h);
 	hlist_bl_for_each_entry(cursor, p, h, hash_link) {
-		if (fscache_compare_volume(candidate, cursor) == 0) {
+		if (fscache_volume_same(candidate, cursor)) {
 			if (!test_bit(FSCACHE_VOLUME_RELINQUISHED, &cursor->flags))
 				goto collision;
 			fscache_see_volume(cursor, fscache_volume_get_hash_collision);
@@ -199,23 +197,30 @@ collision:
  */
 static struct fscache_volume *fscache_alloc_volume(const char *volume_key,
 						   const char *cache_name,
-						   u64 coherency_data)
+						   const void *coherency_data,
+						   size_t coherency_len)
 {
 	struct fscache_volume *volume;
 	struct fscache_cache *cache;
 	size_t klen, hlen;
 	char *key;
 
+	if (!coherency_data)
+		coherency_len = 0;
+
 	cache = fscache_lookup_cache(cache_name, false);
 	if (IS_ERR(cache))
 		return NULL;
 
-	volume = kzalloc(sizeof(*volume), GFP_KERNEL);
+	volume = kzalloc(struct_size(volume, coherency, coherency_len),
+			 GFP_KERNEL);
 	if (!volume)
 		goto err_cache;
 
 	volume->cache = cache;
-	volume->coherency = coherency_data;
+	volume->coherency_len = coherency_len;
+	if (coherency_data)
+		memcpy(volume->coherency, coherency_data, coherency_len);
 	INIT_LIST_HEAD(&volume->proc_link);
 	INIT_WORK(&volume->work, fscache_create_volume_work);
 	refcount_set(&volume->ref, 1);
@@ -225,7 +230,7 @@ static struct fscache_volume *fscache_alloc_volume(const char *volume_key,
 	 * hashing easier.
 	 */
 	klen = strlen(volume_key);
-	hlen = round_up(1 + klen + 1, sizeof(unsigned int));
+	hlen = round_up(1 + klen + 1, sizeof(__le32));
 	key = kzalloc(hlen, GFP_KERNEL);
 	if (!key)
 		goto err_vol;
@@ -233,8 +238,7 @@ static struct fscache_volume *fscache_alloc_volume(const char *volume_key,
 	memcpy(key + 1, volume_key, klen);
 
 	volume->key = key;
-	volume->key_hash = fscache_hash(0, (unsigned int *)key,
-					hlen / sizeof(unsigned int));
+	volume->key_hash = fscache_hash(0, key, hlen);
 
 	volume->debug_id = atomic_inc_return(&fscache_volume_debug_id);
 	down_write(&fscache_addremove_sem);
@@ -311,11 +315,13 @@ no_wait:
  */
 struct fscache_volume *__fscache_acquire_volume(const char *volume_key,
 						const char *cache_name,
-						u64 coherency_data)
+						const void *coherency_data,
+						size_t coherency_len)
 {
 	struct fscache_volume *volume;
 
-	volume = fscache_alloc_volume(volume_key, cache_name, coherency_data);
+	volume = fscache_alloc_volume(volume_key, cache_name,
+				      coherency_data, coherency_len);
 	if (!volume)
 		return ERR_PTR(-ENOMEM);
 
@@ -336,7 +342,7 @@ static void fscache_wake_pending_volume(struct fscache_volume *volume,
 	struct hlist_bl_node *p;
 
 	hlist_bl_for_each_entry(cursor, p, h, hash_link) {
-		if (fscache_compare_volume(cursor, volume) == 0) {
+		if (fscache_volume_same(cursor, volume)) {
 			fscache_see_volume(cursor, fscache_volume_see_hash_wake);
 			clear_bit(FSCACHE_VOLUME_ACQUIRE_PENDING, &cursor->flags);
 			wake_up_bit(&cursor->flags, FSCACHE_VOLUME_ACQUIRE_PENDING);
@@ -416,14 +422,17 @@ void fscache_put_volume(struct fscache_volume *volume,
  * Relinquish a volume representation cookie.
  */
 void __fscache_relinquish_volume(struct fscache_volume *volume,
-				 u64 coherency_data,
+				 const void *coherency_data,
 				 bool invalidate)
 {
 	if (WARN_ON(test_and_set_bit(FSCACHE_VOLUME_RELINQUISHED, &volume->flags)))
 		return;
 
-	if (invalidate)
+	if (invalidate) {
 		set_bit(FSCACHE_VOLUME_INVALIDATE, &volume->flags);
+	} else if (coherency_data) {
+		memcpy(volume->coherency, coherency_data, volume->coherency_len);
+	}
 
 	fscache_put_volume(volume, fscache_volume_put_relinquish);
 }

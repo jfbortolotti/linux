@@ -550,7 +550,7 @@ static ssize_t ina2xx_allow_async_readout_store(struct device *dev,
 	bool val;
 	int ret;
 
-	ret = strtobool((const char *) buf, &val);
+	ret = strtobool(buf, &val);
 	if (ret)
 		return ret;
 
@@ -971,7 +971,7 @@ static int ina2xx_probe(struct i2c_client *client,
 	}
 
 	if (client->dev.of_node)
-		type = (enum ina2xx_ids)of_device_get_match_data(&client->dev);
+		type = (uintptr_t)of_device_get_match_data(&client->dev);
 	else
 		type = id->driver_data;
 	chip->config = &ina2xx_config[type];

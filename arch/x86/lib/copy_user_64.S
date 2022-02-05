@@ -190,8 +190,8 @@ EXPORT_SYMBOL(copy_user_generic_string)
  */
 SYM_FUNC_START(copy_user_enhanced_fast_string)
 	ASM_STAC
-	cmpl $64,%edx
-	jb .L_copy_short_string	/* less then 64 bytes, avoid the costly 'rep' */
+	/* CPUs without FSRM should avoid rep movsb for short copies */
+	ALTERNATIVE "cmpl $64, %edx; jb .L_copy_short_string", "", X86_FEATURE_FSRM
 	movl %edx,%ecx
 1:	rep movsb
 	xorl %eax,%eax
@@ -212,6 +212,7 @@ EXPORT_SYMBOL(copy_user_enhanced_fast_string)
  * Don't try to copy the tail if machine check happened
  *
  * Input:
+ * eax trap number written by ex_handler_copy()
  * rdi destination
  * rsi source
  * rdx count
@@ -220,9 +221,17 @@ EXPORT_SYMBOL(copy_user_enhanced_fast_string)
  * eax uncopied bytes or 0 if successful.
  */
 SYM_CODE_START_LOCAL(.Lcopy_user_handle_tail)
+	cmp $X86_TRAP_MC,%eax
+	je 3f
+
 	movl %edx,%ecx
 1:	rep movsb
 2:	mov %ecx,%eax
+	ASM_CLAC
+	RET
+
+3:
+	movl %edx,%eax
 	ASM_CLAC
 	RET
 

@@ -468,8 +468,6 @@ void dcn10_log_hw_state(struct dc *dc,
 	log_mpc_crc(dc, log_ctx);
 
 	{
-		int hpo_dp_link_enc_count = 0;
-
 		if (pool->hpo_dp_stream_enc_count > 0) {
 			DTN_INFO("DP HPO S_ENC:  Enabled  OTG   Format   Depth   Vid   SDP   Compressed  Link\n");
 			for (i = 0; i < pool->hpo_dp_stream_enc_count; i++) {
@@ -500,18 +498,14 @@ void dcn10_log_hw_state(struct dc *dc,
 		}
 
 		/* log DP HPO L_ENC section if any hpo_dp_link_enc exists */
-		for (i = 0; i < dc->link_count; i++)
-			if (dc->links[i]->hpo_dp_link_enc)
-				hpo_dp_link_enc_count++;
-
-		if (hpo_dp_link_enc_count) {
+		if (pool->hpo_dp_link_enc_count) {
 			DTN_INFO("DP HPO L_ENC:  Enabled  Mode   Lanes   Stream  Slots   VC Rate X    VC Rate Y\n");
 
-			for (i = 0; i < dc->link_count; i++) {
-				struct hpo_dp_link_encoder *hpo_dp_link_enc = dc->links[i]->hpo_dp_link_enc;
+			for (i = 0; i < pool->hpo_dp_link_enc_count; i++) {
+				struct hpo_dp_link_encoder *hpo_dp_link_enc = pool->hpo_dp_link_enc[i];
 				struct hpo_dp_link_enc_state hpo_dp_le_state = {0};
 
-				if (hpo_dp_link_enc && hpo_dp_link_enc->funcs->read_state) {
+				if (hpo_dp_link_enc->funcs->read_state) {
 					hpo_dp_link_enc->funcs->read_state(hpo_dp_link_enc, &hpo_dp_le_state);
 					DTN_INFO("[%d]:                 %d  %6s     %d        %d      %d     %d     %d\n",
 							hpo_dp_link_enc->inst,
@@ -1371,7 +1365,12 @@ void dcn10_init_pipes(struct dc *dc, struct dc_state *context)
 		uint32_t opp_id_src1 = OPP_ID_INVALID;
 
 		// Step 1: To find out which OPTC is running & OPTC DSC is ON
-		for (i = 0; i < dc->res_pool->res_cap->num_timing_generator; i++) {
+		// We can't use res_pool->res_cap->num_timing_generator to check
+		// Because it records display pipes default setting built in driver,
+		// not display pipes of the current chip.
+		// Some ASICs would be fused display pipes less than the default setting.
+		// In dcnxx_resource_construct function, driver would obatin real information.
+		for (i = 0; i < dc->res_pool->timing_generator_count; i++) {
 			uint32_t optc_dsc_state = 0;
 			struct timing_generator *tg = dc->res_pool->timing_generators[i];
 

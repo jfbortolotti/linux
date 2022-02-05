@@ -11,6 +11,7 @@
 #include <net/net_namespace.h>
 #include <net/netns/generic.h>
 #include <linux/percpu_counter.h>
+#include <linux/siphash.h>
 
 /* Hash tables for nfs4_clientid state */
 #define CLIENT_HASH_BITS                 4
@@ -108,9 +109,8 @@ struct nfsd_net {
 	bool nfsd_net_up;
 	bool lockd_up;
 
-	/* Time of server startup */
-	struct timespec64 nfssvc_boot;
-	seqlock_t boot_lock;
+	seqlock_t writeverf_lock;
+	unsigned char writeverf[8];
 
 	/*
 	 * Max number of connections this nfsd container will allow. Defaults
@@ -187,6 +187,8 @@ struct nfsd_net {
 	char			nfsd_name[UNX_MAXNODENAME+1];
 
 	struct nfsd_fcache_disposal *fcache_disposal;
+
+	siphash_key_t		siphash_key;
 };
 
 /* Simple check to find out if a given net was properly initialized */
@@ -196,6 +198,6 @@ extern void nfsd_netns_free_versions(struct nfsd_net *nn);
 
 extern unsigned int nfsd_net_id;
 
-void nfsd_copy_boot_verifier(__be32 verf[2], struct nfsd_net *nn);
-void nfsd_reset_boot_verifier(struct nfsd_net *nn);
+void nfsd_copy_write_verifier(__be32 verf[2], struct nfsd_net *nn);
+void nfsd_reset_write_verifier(struct nfsd_net *nn);
 #endif /* __NFSD_NETNS_H__ */

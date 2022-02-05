@@ -44,7 +44,7 @@ struct xive_irq_bitmap {
 
 static LIST_HEAD(xive_irq_bitmaps);
 
-static int xive_irq_bitmap_add(int base, int count)
+static int __init xive_irq_bitmap_add(int base, int count)
 {
 	struct xive_irq_bitmap *xibm;
 
@@ -653,6 +653,9 @@ static int xive_spapr_debug_show(struct seq_file *m, void *private)
 	struct xive_irq_bitmap *xibm;
 	char *buf = kmalloc(PAGE_SIZE, GFP_KERNEL);
 
+	if (!buf)
+		return -ENOMEM;
+
 	list_for_each_entry(xibm, &xive_irq_bitmaps, list) {
 		memset(buf, 0, PAGE_SIZE);
 		bitmap_print_to_pagebuf(true, buf, xibm->bitmap, xibm->count);
@@ -687,7 +690,7 @@ static const struct xive_ops xive_spapr_ops = {
 /*
  * get max priority from "/ibm,plat-res-int-priorities"
  */
-static bool xive_get_max_prio(u8 *max_prio)
+static bool __init xive_get_max_prio(u8 *max_prio)
 {
 	struct device_node *rootdn;
 	const __be32 *reg;
@@ -741,7 +744,7 @@ static bool xive_get_max_prio(u8 *max_prio)
 	return true;
 }
 
-static const u8 *get_vec5_feature(unsigned int index)
+static const u8 *__init get_vec5_feature(unsigned int index)
 {
 	unsigned long root, chosen;
 	int size;

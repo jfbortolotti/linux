@@ -236,7 +236,8 @@ static void hugetlb_allocate_area(void **alloc_area)
 
 	*alloc_area = mmap(NULL, nr_pages * page_size, PROT_READ | PROT_WRITE,
 			   (map_shared ? MAP_SHARED : MAP_PRIVATE) |
-			   MAP_HUGETLB,
+			   MAP_HUGETLB |
+			   (*alloc_area == area_src ? 0 : MAP_NORESERVE),
 			   huge_fd, *alloc_area == area_src ? 0 :
 			   nr_pages * page_size);
 	if (*alloc_area == MAP_FAILED)

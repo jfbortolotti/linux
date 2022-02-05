@@ -1188,17 +1188,6 @@ struct cfg80211_unsol_bcast_probe_resp {
 };
 
 /**
- * enum cfg80211_ap_settings_flags - AP settings flags
- *
- * Used by cfg80211_ap_settings
- *
- * @AP_SETTINGS_EXTERNAL_AUTH_SUPPORT: AP supports external authentication
- */
-enum cfg80211_ap_settings_flags {
-	AP_SETTINGS_EXTERNAL_AUTH_SUPPORT = BIT(0),
-};
-
-/**
  * struct cfg80211_ap_settings - AP configuration
  *
  * Used to configure an AP interface.
@@ -4073,14 +4062,14 @@ struct mgmt_frame_regs {
  *	those to decrypt (Re)Association Request and encrypt (Re)Association
  *	Response frame.
  *
- * @set_radar_offchan: Configure dedicated offchannel chain available for
+ * @set_radar_background: Configure dedicated offchannel chain available for
  *	radar/CAC detection on some hw. This chain can't be used to transmit
  *	or receive frames and it is bounded to a running wdev.
- *	Offchannel radar/CAC detection allows to avoid the CAC downtime
+ *	Background radar/CAC detection allows to avoid the CAC downtime
  *	switching to a different channel during CAC detection on the selected
  *	radar channel.
  *	The caller is expected to set chandef pointer to NULL in order to
- *	disable offchannel CAC/radar detection.
+ *	disable background CAC/radar detection.
  */
 struct cfg80211_ops {
 	int	(*suspend)(struct wiphy *wiphy, struct cfg80211_wowlan *wow);
@@ -4413,8 +4402,8 @@ struct cfg80211_ops {
 				struct cfg80211_color_change_settings *params);
 	int     (*set_fils_aad)(struct wiphy *wiphy, struct net_device *dev,
 				struct cfg80211_fils_aad *fils_aad);
-	int	(*set_radar_offchan)(struct wiphy *wiphy,
-				     struct cfg80211_chan_def *chandef);
+	int	(*set_radar_background)(struct wiphy *wiphy,
+					struct cfg80211_chan_def *chandef);
 };
 
 /*
@@ -6386,17 +6375,6 @@ static inline void cfg80211_gen_new_bssid(const u8 *bssid, u8 max_bssid,
 }
 
 /**
- * cfg80211_get_ies_channel_number - returns the channel number from ies
- * @ie: IEs
- * @ielen: length of IEs
- * @band: enum nl80211_band of the channel
- *
- * Returns the channel number, or -1 if none could be determined.
- */
-int cfg80211_get_ies_channel_number(const u8 *ie, size_t ielen,
-				    enum nl80211_band band);
-
-/**
  * cfg80211_is_element_inherited - returns if element ID should be inherited
  * @element: element to check
  * @non_inherit_element: non inheritance element
@@ -6430,6 +6408,19 @@ enum cfg80211_bss_frame_type {
 	CFG80211_BSS_FTYPE_BEACON,
 	CFG80211_BSS_FTYPE_PRESP,
 };
+
+/**
+ * cfg80211_get_ies_channel_number - returns the channel number from ies
+ * @ie: IEs
+ * @ielen: length of IEs
+ * @band: enum nl80211_band of the channel
+ * @ftype: frame type
+ *
+ * Returns the channel number, or -1 if none could be determined.
+ */
+int cfg80211_get_ies_channel_number(const u8 *ie, size_t ielen,
+				    enum nl80211_band band,
+				    enum cfg80211_bss_frame_type ftype);
 
 /**
  * cfg80211_inform_bss_data - inform cfg80211 of a new BSS
@@ -7626,9 +7617,9 @@ cfg80211_radar_event(struct wiphy *wiphy,
 }
 
 static inline void
-cfg80211_offchan_radar_event(struct wiphy *wiphy,
-			     struct cfg80211_chan_def *chandef,
-			     gfp_t gfp)
+cfg80211_background_radar_event(struct wiphy *wiphy,
+				struct cfg80211_chan_def *chandef,
+				gfp_t gfp)
 {
 	__cfg80211_radar_event(wiphy, chandef, true, gfp);
 }
@@ -7663,13 +7654,13 @@ void cfg80211_cac_event(struct net_device *netdev,
 			enum nl80211_radar_event event, gfp_t gfp);
 
 /**
- * cfg80211_offchan_cac_abort - Channel Availability Check offchan abort event
+ * cfg80211_background_cac_abort - Channel Availability Check offchan abort event
  * @wiphy: the wiphy
  *
  * This function is called by the driver when a Channel Availability Check
  * (CAC) is aborted by a offchannel dedicated chain.
  */
-void cfg80211_offchan_cac_abort(struct wiphy *wiphy);
+void cfg80211_background_cac_abort(struct wiphy *wiphy);
 
 /**
  * cfg80211_gtk_rekey_notify - notify userspace about driver rekeying
@@ -8286,6 +8277,18 @@ void cfg80211_pmsr_complete(struct wireless_dev *wdev,
 bool cfg80211_iftype_allowed(struct wiphy *wiphy, enum nl80211_iftype iftype,
 			     bool is_4addr, u8 check_swif);
 
+
+/**
+ * cfg80211_assoc_comeback - notification of association that was
+ * temporarly rejected with a comeback
+ * @netdev: network device
+ * @bss: the bss entry with which association is in progress.
+ * @timeout: timeout interval value TUs.
+ *
+ * this function may sleep. the caller must hold the corresponding wdev's mutex.
+ */
+void cfg80211_assoc_comeback(struct net_device *netdev,
+			     struct cfg80211_bss *bss, u32 timeout);
 
 /* Logging, debugging and troubleshooting/diagnostic helpers. */
 

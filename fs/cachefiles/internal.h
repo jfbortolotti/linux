@@ -227,7 +227,8 @@ extern int cachefiles_delete_object(struct cachefiles_object *object,
 extern bool cachefiles_look_up_object(struct cachefiles_object *object);
 extern struct dentry *cachefiles_get_directory(struct cachefiles_cache *cache,
 					       struct dentry *dir,
-					       const char *name);
+					       const char *name,
+					       bool *_is_new);
 extern void cachefiles_put_directory(struct dentry *dir);
 
 extern int cachefiles_cull(struct cachefiles_cache *cache, struct dentry *dir,
@@ -276,6 +277,8 @@ extern int cachefiles_remove_object_xattr(struct cachefiles_cache *cache,
 					  struct cachefiles_object *object,
 					  struct dentry *dentry);
 extern void cachefiles_prepare_to_write(struct fscache_cookie *cookie);
+extern bool cachefiles_set_volume_xattr(struct cachefiles_volume *volume);
+extern int cachefiles_check_volume_xattr(struct cachefiles_volume *volume);
 
 /*
  * Error handling

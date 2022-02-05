@@ -391,7 +391,6 @@ static void vc4_atomic_commit_tail(struct drm_atomic_state *state)
 
 		clk_set_min_rate(hvs->core_clk, core_rate);
 	}
-
 	drm_atomic_helper_commit_modeset_disables(dev, state);
 
 	vc4_ctm_commit(vc4, state);

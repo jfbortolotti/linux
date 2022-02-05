@@ -506,7 +506,7 @@ void v9fs_session_close(struct v9fs_session_info *v9ses)
 	}
 
 #ifdef CONFIG_9P_FSCACHE
-	fscache_relinquish_volume(v9fs_session_cache(v9ses), 0, false);
+	fscache_relinquish_volume(v9fs_session_cache(v9ses), NULL, false);
 	kfree(v9ses->cachetag);
 #endif
 	kfree(v9ses->uname);

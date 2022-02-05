@@ -1287,8 +1287,12 @@ static void dw_mci_setup_bus(struct dw_mci_slot *slot, bool force_clkinit)
 static void dw_mci_set_data_timeout(struct dw_mci *host,
 				    unsigned int timeout_ns)
 {
+	const struct dw_mci_drv_data *drv_data = host->drv_data;
 	u32 clk_div, tmout;
 	u64 tmp;
+
+	if (drv_data && drv_data->set_data_timeout)
+		return drv_data->set_data_timeout(host, timeout_ns);
 
 	clk_div = (mci_readl(host, CLKDIV) & 0xFF) * 2;
 	if (clk_div == 0)
@@ -1307,7 +1311,7 @@ static void dw_mci_set_data_timeout(struct dw_mci *host,
 		tmout |= (tmp & 0xFFFFFF) << 8;
 
 	mci_writel(host, TMOUT, tmout);
-	dev_dbg(host->dev, "timeout_ns: %u => TMOUT[31:8]: 0x%#08x",
+	dev_dbg(host->dev, "timeout_ns: %u => TMOUT[31:8]: %#08x",
 		timeout_ns, tmout >> 8);
 }
 
@@ -1995,18 +1999,24 @@ static int dw_mci_data_complete(struct dw_mci *host, struct mmc_data *data)
 
 static void dw_mci_set_drto(struct dw_mci *host)
 {
+	const struct dw_mci_drv_data *drv_data = host->drv_data;
 	unsigned int drto_clks;
 	unsigned int drto_div;
 	unsigned int drto_ms;
 	unsigned long irqflags;
 
-	drto_clks = mci_readl(host, TMOUT) >> 8;
+	if (drv_data && drv_data->get_drto_clks)
+		drto_clks = drv_data->get_drto_clks(host);
+	else
+		drto_clks = mci_readl(host, TMOUT) >> 8;
 	drto_div = (mci_readl(host, CLKDIV) & 0xff) * 2;
 	if (drto_div == 0)
 		drto_div = 1;
 
 	drto_ms = DIV_ROUND_UP_ULL((u64)MSEC_PER_SEC * drto_clks * drto_div,
 				   host->bus_hz);
+
+	dev_dbg(host->dev, "drto_ms: %u\n", drto_ms);
 
 	/* add a bit spare time */
 	drto_ms += 10;
@@ -2752,11 +2762,20 @@ static irqreturn_t dw_mci_interrupt(int irq, void *dev_id)
 		if (pending & DW_MCI_DATA_ERROR_FLAGS) {
 			spin_lock(&host->irq_lock);
 
+			if (host->quirks & DW_MMC_QUIRK_EXTENDED_TMOUT)
+				del_timer(&host->dto_timer);
+
 			/* if there is an error report DATA_ERROR */
 			mci_writel(host, RINTSTS, DW_MCI_DATA_ERROR_FLAGS);
 			host->data_status = pending;
 			smp_wmb(); /* drain writebuffer */
 			set_bit(EVENT_DATA_ERROR, &host->pending_events);
+
+			if (host->quirks & DW_MMC_QUIRK_EXTENDED_TMOUT)
+				/* In case of error, we cannot expect a DTO */
+				set_bit(EVENT_DATA_COMPLETE,
+					&host->pending_events);
+
 			tasklet_schedule(&host->tasklet);
 
 			spin_unlock(&host->irq_lock);

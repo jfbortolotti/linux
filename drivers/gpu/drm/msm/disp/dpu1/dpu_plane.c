@@ -13,7 +13,6 @@
 #include <drm/drm_atomic.h>
 #include <drm/drm_atomic_uapi.h>
 #include <drm/drm_damage_helper.h>
-#include <drm/drm_file.h>
 #include <drm/drm_gem_atomic_helper.h>
 
 #include "msm_drv.h"
@@ -108,13 +107,6 @@ struct dpu_plane {
 	bool is_virtual;
 	struct list_head mplane_list;
 	struct dpu_mdss_cfg *catalog;
-
-	/* debugfs related stuff */
-	struct dentry *debugfs_root;
-	struct dpu_debugfs_regset32 debugfs_src;
-	struct dpu_debugfs_regset32 debugfs_scaler;
-	struct dpu_debugfs_regset32 debugfs_csc;
-	bool debugfs_default_scale;
 };
 
 static const uint64_t supported_format_modifiers[] = {
@@ -1313,6 +1305,46 @@ dpu_plane_duplicate_state(struct drm_plane *plane)
 	return &pstate->base;
 }
 
+static const char * const multirect_mode_name[] = {
+	[DPU_SSPP_MULTIRECT_NONE] = "none",
+	[DPU_SSPP_MULTIRECT_PARALLEL] = "parallel",
+	[DPU_SSPP_MULTIRECT_TIME_MX] = "time_mx",
+};
+
+static const char * const multirect_index_name[] = {
+	[DPU_SSPP_RECT_SOLO] = "solo",
+	[DPU_SSPP_RECT_0] = "rect_0",
+	[DPU_SSPP_RECT_1] = "rect_1",
+};
+
+static const char *dpu_get_multirect_mode(enum dpu_sspp_multirect_mode mode)
+{
+	if (WARN_ON(mode >= ARRAY_SIZE(multirect_mode_name)))
+		return "unknown";
+
+	return multirect_mode_name[mode];
+}
+
+static const char *dpu_get_multirect_index(enum dpu_sspp_multirect_index index)
+{
+	if (WARN_ON(index >= ARRAY_SIZE(multirect_index_name)))
+		return "unknown";
+
+	return multirect_index_name[index];
+}
+
+static void dpu_plane_atomic_print_state(struct drm_printer *p,
+		const struct drm_plane_state *state)
+{
+	const struct dpu_plane_state *pstate = to_dpu_plane_state(state);
+	const struct dpu_plane *pdpu = to_dpu_plane(state->plane);
+
+	drm_printf(p, "\tstage=%d\n", pstate->stage);
+	drm_printf(p, "\tsspp=%s\n", pdpu->pipe_hw->cap->name);
+	drm_printf(p, "\tmultirect_mode=%s\n", dpu_get_multirect_mode(pstate->multirect_mode));
+	drm_printf(p, "\tmultirect_index=%s\n", dpu_get_multirect_index(pstate->multirect_index));
+}
+
 static void dpu_plane_reset(struct drm_plane *plane)
 {
 	struct dpu_plane *pdpu;
@@ -1342,7 +1374,7 @@ static void dpu_plane_reset(struct drm_plane *plane)
 }
 
 #ifdef CONFIG_DEBUG_FS
-static void dpu_plane_danger_signal_ctrl(struct drm_plane *plane, bool enable)
+void dpu_plane_danger_signal_ctrl(struct drm_plane *plane, bool enable)
 {
 	struct dpu_plane *pdpu = to_dpu_plane(plane);
 	struct dpu_kms *dpu_kms = _dpu_plane_get_kms(plane);
@@ -1355,166 +1387,22 @@ static void dpu_plane_danger_signal_ctrl(struct drm_plane *plane, bool enable)
 	pm_runtime_put_sync(&dpu_kms->pdev->dev);
 }
 
-static ssize_t _dpu_plane_danger_read(struct file *file,
-			char __user *buff, size_t count, loff_t *ppos)
-{
-	struct dpu_kms *kms = file->private_data;
-	int len;
-	char buf[40];
-
-	len = scnprintf(buf, sizeof(buf), "%d\n", !kms->has_danger_ctrl);
-
-	return simple_read_from_buffer(buff, count, ppos, buf, len);
-}
-
-static void _dpu_plane_set_danger_state(struct dpu_kms *kms, bool enable)
+/* SSPP live inside dpu_plane private data only. Enumerate them here. */
+void dpu_debugfs_sspp_init(struct dpu_kms *dpu_kms, struct dentry *debugfs_root)
 {
 	struct drm_plane *plane;
+	struct dentry *entry = debugfs_create_dir("sspp", debugfs_root);
 
-	drm_for_each_plane(plane, kms->dev) {
-		if (plane->fb && plane->state) {
-			dpu_plane_danger_signal_ctrl(plane, enable);
-			DPU_DEBUG("plane:%d img:%dx%d ",
-				plane->base.id, plane->fb->width,
-				plane->fb->height);
-			DPU_DEBUG("src[%d,%d,%d,%d] dst[%d,%d,%d,%d]\n",
-				plane->state->src_x >> 16,
-				plane->state->src_y >> 16,
-				plane->state->src_w >> 16,
-				plane->state->src_h >> 16,
-				plane->state->crtc_x, plane->state->crtc_y,
-				plane->state->crtc_w, plane->state->crtc_h);
-		} else {
-			DPU_DEBUG("Inactive plane:%d\n", plane->base.id);
-		}
+	if (IS_ERR(entry))
+		return;
+
+	drm_for_each_plane(plane, dpu_kms->dev) {
+		struct dpu_plane *pdpu = to_dpu_plane(plane);
+
+		_dpu_hw_sspp_init_debugfs(pdpu->pipe_hw, dpu_kms, entry);
 	}
-}
-
-static ssize_t _dpu_plane_danger_write(struct file *file,
-		    const char __user *user_buf, size_t count, loff_t *ppos)
-{
-	struct dpu_kms *kms = file->private_data;
-	int disable_panic;
-	int ret;
-
-	ret = kstrtouint_from_user(user_buf, count, 0, &disable_panic);
-	if (ret)
-		return ret;
-
-	if (disable_panic) {
-		/* Disable panic signal for all active pipes */
-		DPU_DEBUG("Disabling danger:\n");
-		_dpu_plane_set_danger_state(kms, false);
-		kms->has_danger_ctrl = false;
-	} else {
-		/* Enable panic signal for all active pipes */
-		DPU_DEBUG("Enabling danger:\n");
-		kms->has_danger_ctrl = true;
-		_dpu_plane_set_danger_state(kms, true);
-	}
-
-	return count;
-}
-
-static const struct file_operations dpu_plane_danger_enable = {
-	.open = simple_open,
-	.read = _dpu_plane_danger_read,
-	.write = _dpu_plane_danger_write,
-};
-
-static int _dpu_plane_init_debugfs(struct drm_plane *plane)
-{
-	struct dpu_plane *pdpu = to_dpu_plane(plane);
-	struct dpu_kms *kms = _dpu_plane_get_kms(plane);
-	const struct dpu_sspp_cfg *cfg = pdpu->pipe_hw->cap;
-	const struct dpu_sspp_sub_blks *sblk = cfg->sblk;
-
-	/* create overall sub-directory for the pipe */
-	pdpu->debugfs_root =
-		debugfs_create_dir(plane->name,
-				plane->dev->primary->debugfs_root);
-
-	/* don't error check these */
-	debugfs_create_xul("features", 0600,
-			pdpu->debugfs_root, (unsigned long *)&pdpu->pipe_hw->cap->features);
-
-	/* add register dump support */
-	dpu_debugfs_setup_regset32(&pdpu->debugfs_src,
-			sblk->src_blk.base + cfg->base,
-			sblk->src_blk.len,
-			kms);
-	dpu_debugfs_create_regset32("src_blk", 0400,
-			pdpu->debugfs_root, &pdpu->debugfs_src);
-
-	if (cfg->features & BIT(DPU_SSPP_SCALER_QSEED3) ||
-			cfg->features & BIT(DPU_SSPP_SCALER_QSEED3LITE) ||
-			cfg->features & BIT(DPU_SSPP_SCALER_QSEED2) ||
-			cfg->features & BIT(DPU_SSPP_SCALER_QSEED4)) {
-		dpu_debugfs_setup_regset32(&pdpu->debugfs_scaler,
-				sblk->scaler_blk.base + cfg->base,
-				sblk->scaler_blk.len,
-				kms);
-		dpu_debugfs_create_regset32("scaler_blk", 0400,
-				pdpu->debugfs_root,
-				&pdpu->debugfs_scaler);
-		debugfs_create_bool("default_scaling",
-				0600,
-				pdpu->debugfs_root,
-				&pdpu->debugfs_default_scale);
-	}
-
-	if (cfg->features & BIT(DPU_SSPP_CSC) ||
-			cfg->features & BIT(DPU_SSPP_CSC_10BIT)) {
-		dpu_debugfs_setup_regset32(&pdpu->debugfs_csc,
-				sblk->csc_blk.base + cfg->base,
-				sblk->csc_blk.len,
-				kms);
-		dpu_debugfs_create_regset32("csc_blk", 0400,
-				pdpu->debugfs_root, &pdpu->debugfs_csc);
-	}
-
-	debugfs_create_u32("xin_id",
-			0400,
-			pdpu->debugfs_root,
-			(u32 *) &cfg->xin_id);
-	debugfs_create_u32("clk_ctrl",
-			0400,
-			pdpu->debugfs_root,
-			(u32 *) &cfg->clk_ctrl);
-	debugfs_create_x32("creq_vblank",
-			0600,
-			pdpu->debugfs_root,
-			(u32 *) &sblk->creq_vblank);
-	debugfs_create_x32("danger_vblank",
-			0600,
-			pdpu->debugfs_root,
-			(u32 *) &sblk->danger_vblank);
-
-	debugfs_create_file("disable_danger",
-			0600,
-			pdpu->debugfs_root,
-			kms, &dpu_plane_danger_enable);
-
-	return 0;
-}
-#else
-static int _dpu_plane_init_debugfs(struct drm_plane *plane)
-{
-	return 0;
 }
 #endif
-
-static int dpu_plane_late_register(struct drm_plane *plane)
-{
-	return _dpu_plane_init_debugfs(plane);
-}
-
-static void dpu_plane_early_unregister(struct drm_plane *plane)
-{
-	struct dpu_plane *pdpu = to_dpu_plane(plane);
-
-	debugfs_remove_recursive(pdpu->debugfs_root);
-}
 
 static bool dpu_plane_format_mod_supported(struct drm_plane *plane,
 		uint32_t format, uint64_t modifier)
@@ -1540,8 +1428,7 @@ static const struct drm_plane_funcs dpu_plane_funcs = {
 		.reset = dpu_plane_reset,
 		.atomic_duplicate_state = dpu_plane_duplicate_state,
 		.atomic_destroy_state = dpu_plane_destroy_state,
-		.late_register = dpu_plane_late_register,
-		.early_unregister = dpu_plane_early_unregister,
+		.atomic_print_state = dpu_plane_atomic_print_state,
 		.format_mod_supported = dpu_plane_format_mod_supported,
 };
 

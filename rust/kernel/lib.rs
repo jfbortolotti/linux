@@ -18,8 +18,12 @@
     concat_idents,
     const_fn_trait_bound,
     const_mut_refs,
+    const_ptr_offset_from,
+    const_refs_to_cell,
+    const_trait_impl,
     doc_cfg,
     generic_associated_types,
+    maybe_uninit_extra,
     ptr_metadata,
     receiver_trait,
     coerce_unsized,
@@ -44,6 +48,8 @@ pub mod amba;
 pub mod buffer;
 pub mod c_types;
 pub mod chrdev;
+#[cfg(CONFIG_COMMON_CLK)]
+pub mod clk;
 pub mod cred;
 pub mod device;
 pub mod driver;
@@ -84,7 +90,7 @@ pub mod io_buffer;
 pub mod io_mem;
 pub mod iov_iter;
 pub mod of;
-pub mod platdev;
+pub mod platform;
 mod types;
 pub mod user_ptr;
 

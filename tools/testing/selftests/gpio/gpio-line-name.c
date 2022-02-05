@@ -2,7 +2,7 @@
 /*
  * GPIO character device helper for reading line names.
  *
- * Copyright (C) 2021 Bartosz Golaszewski <bgolaszewski@baylibre.com>
+ * Copyright (C) 2021 Bartosz Golaszewski <brgl@bgdev.pl>
  */
 
 #include <fcntl.h>

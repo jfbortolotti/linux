@@ -227,6 +227,7 @@ struct btf;
 LIBBPF_API struct btf *bpf_object__btf(const struct bpf_object *obj);
 LIBBPF_API int bpf_object__btf_fd(const struct bpf_object *obj);
 
+LIBBPF_DEPRECATED_SINCE(0, 7, "use bpf_object__find_program_by_name() instead")
 LIBBPF_API struct bpf_program *
 bpf_object__find_program_by_title(const struct bpf_object *obj,
 				  const char *title);
@@ -676,7 +677,8 @@ bpf_object__find_map_fd_by_name(const struct bpf_object *obj, const char *name);
  * Get bpf_map through the offset of corresponding struct bpf_map_def
  * in the BPF object file.
  */
-LIBBPF_API struct bpf_map *
+LIBBPF_API LIBBPF_DEPRECATED_SINCE(0, 8, "use bpf_object__find_map_by_name() instead")
+struct bpf_map *
 bpf_object__find_map_by_offset(struct bpf_object *obj, size_t offset);
 
 LIBBPF_API LIBBPF_DEPRECATED_SINCE(0, 7, "use bpf_object__next_map() instead")
@@ -743,6 +745,7 @@ LIBBPF_API void *bpf_map__priv(const struct bpf_map *map);
 LIBBPF_API int bpf_map__set_initial_value(struct bpf_map *map,
 					  const void *data, size_t size);
 LIBBPF_API const void *bpf_map__initial_value(struct bpf_map *map, size_t *psize);
+LIBBPF_DEPRECATED_SINCE(0, 8, "use bpf_map__type() instead")
 LIBBPF_API bool bpf_map__is_offload_neutral(const struct bpf_map *map);
 
 /**
@@ -1025,6 +1028,7 @@ LIBBPF_API int perf_buffer__buffer_fd(const struct perf_buffer *pb, size_t buf_i
 typedef enum bpf_perf_event_ret
 	(*bpf_perf_event_print_t)(struct perf_event_header *hdr,
 				  void *private_data);
+LIBBPF_DEPRECATED_SINCE(0, 8, "use perf_buffer__poll() or  perf_buffer__consume() instead")
 LIBBPF_API enum bpf_perf_event_ret
 bpf_perf_event_read_simple(void *mmap_mem, size_t mmap_size, size_t page_size,
 			   void **copy_mem, size_t *copy_size,
@@ -1051,12 +1055,56 @@ bpf_prog_linfo__lfind(const struct bpf_prog_linfo *prog_linfo,
  * user, causing subsequent probes to fail. In this case, the caller may want
  * to adjust that limit with setrlimit().
  */
-LIBBPF_API bool bpf_probe_prog_type(enum bpf_prog_type prog_type,
-				    __u32 ifindex);
+LIBBPF_DEPRECATED_SINCE(0, 8, "use libbpf_probe_bpf_prog_type() instead")
+LIBBPF_API bool bpf_probe_prog_type(enum bpf_prog_type prog_type, __u32 ifindex);
+LIBBPF_DEPRECATED_SINCE(0, 8, "use libbpf_probe_bpf_map_type() instead")
 LIBBPF_API bool bpf_probe_map_type(enum bpf_map_type map_type, __u32 ifindex);
-LIBBPF_API bool bpf_probe_helper(enum bpf_func_id id,
-				 enum bpf_prog_type prog_type, __u32 ifindex);
+LIBBPF_DEPRECATED_SINCE(0, 8, "use libbpf_probe_bpf_helper() instead")
+LIBBPF_API bool bpf_probe_helper(enum bpf_func_id id, enum bpf_prog_type prog_type, __u32 ifindex);
+LIBBPF_DEPRECATED_SINCE(0, 8, "implement your own or use bpftool for feature detection")
 LIBBPF_API bool bpf_probe_large_insn_limit(__u32 ifindex);
+
+/**
+ * @brief **libbpf_probe_bpf_prog_type()** detects if host kernel supports
+ * BPF programs of a given type.
+ * @param prog_type BPF program type to detect kernel support for
+ * @param opts reserved for future extensibility, should be NULL
+ * @return 1, if given program type is supported; 0, if given program type is
+ * not supported; negative error code if feature detection failed or can't be
+ * performed
+ *
+ * Make sure the process has required set of CAP_* permissions (or runs as
+ * root) when performing feature checking.
+ */
+LIBBPF_API int libbpf_probe_bpf_prog_type(enum bpf_prog_type prog_type, const void *opts);
+/**
+ * @brief **libbpf_probe_bpf_map_type()** detects if host kernel supports
+ * BPF maps of a given type.
+ * @param map_type BPF map type to detect kernel support for
+ * @param opts reserved for future extensibility, should be NULL
+ * @return 1, if given map type is supported; 0, if given map type is
+ * not supported; negative error code if feature detection failed or can't be
+ * performed
+ *
+ * Make sure the process has required set of CAP_* permissions (or runs as
+ * root) when performing feature checking.
+ */
+LIBBPF_API int libbpf_probe_bpf_map_type(enum bpf_map_type map_type, const void *opts);
+/**
+ * @brief **libbpf_probe_bpf_helper()** detects if host kernel supports the
+ * use of a given BPF helper from specified BPF program type.
+ * @param prog_type BPF program type used to check the support of BPF helper
+ * @param helper_id BPF helper ID (enum bpf_func_id) to check support for
+ * @param opts reserved for future extensibility, should be NULL
+ * @return 1, if given combination of program type and helper is supported; 0,
+ * if the combination is not supported; negative error code if feature
+ * detection for provided input arguments failed or can't be performed
+ *
+ * Make sure the process has required set of CAP_* permissions (or runs as
+ * root) when performing feature checking.
+ */
+LIBBPF_API int libbpf_probe_bpf_helper(enum bpf_prog_type prog_type,
+				       enum bpf_func_id helper_id, const void *opts);
 
 /*
  * Get bpf_prog_info in continuous memory

@@ -334,7 +334,8 @@ static int test_mmap_cpus(void)
 	};
 	cpu_set_t saved_mask;
 	char path[PATH_MAX];
-	int id, err, cpu, tmp;
+	int id, err, tmp;
+	struct perf_cpu cpu;
 	union perf_event *event;
 	int count = 0;
 
@@ -377,7 +378,7 @@ static int test_mmap_cpus(void)
 		cpu_set_t mask;
 
 		CPU_ZERO(&mask);
-		CPU_SET(cpu, &mask);
+		CPU_SET(cpu.cpu, &mask);
 
 		err = sched_setaffinity(0, sizeof(mask), &mask);
 		__T("sched_setaffinity failed", err == 0);
@@ -535,7 +536,7 @@ static int test_stat_multiplexing(void)
 				    (double)counts[i].run / (double)counts[i].ena * 100.0,
 				    counts[i].run, counts[i].ena);
 		} else if (scaled == -1) {
-			__T_VERBOSE("\t Not Runnnig\n");
+			__T_VERBOSE("\t Not Running\n");
 		} else {
 			__T_VERBOSE("\t Not Scaling\n");
 		}

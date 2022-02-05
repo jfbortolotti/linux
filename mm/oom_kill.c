@@ -794,7 +794,7 @@ static inline bool __task_will_free_mem(struct task_struct *task)
 	 * coredump_task_exit(), so the oom killer cannot assume that
 	 * the process will promptly exit and release memory.
 	 */
-	if (sig->flags & SIGNAL_GROUP_COREDUMP)
+	if (sig->core_state)
 		return false;
 
 	if (sig->flags & SIGNAL_GROUP_EXIT)
@@ -1070,7 +1070,7 @@ bool out_of_memory(struct oom_control *oc)
 
 	if (!is_memcg_oom(oc)) {
 		blocking_notifier_call_chain(&oom_notify_list, 0, &freed);
-		if (freed > 0)
+		if (freed > 0 && !is_sysrq_oom(oc))
 			/* Got some memory back in the last second. */
 			return true;
 	}

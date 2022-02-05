@@ -34,6 +34,10 @@
 #include "discard.h"
 #include "zoned.h"
 
+#define BTRFS_BLOCK_GROUP_STRIPE_MASK	(BTRFS_BLOCK_GROUP_RAID0 | \
+					 BTRFS_BLOCK_GROUP_RAID10 | \
+					 BTRFS_BLOCK_GROUP_RAID56_MASK)
+
 const struct btrfs_raid_attr btrfs_raid_array[BTRFS_NR_RAID_TYPES] = {
 	[BTRFS_RAID_RAID10] = {
 		.sub_stripes	= 2,
@@ -1162,7 +1166,6 @@ static void btrfs_close_one_device(struct btrfs_device *device)
 	ASSERT(!test_bit(BTRFS_DEV_STATE_REPLACE_TGT, &device->dev_state));
 	ASSERT(list_empty(&device->dev_alloc_list));
 	ASSERT(list_empty(&device->post_commit_list));
-	ASSERT(atomic_read(&device->reada_in_flight) == 0);
 }
 
 static void close_fs_devices(struct btrfs_fs_devices *fs_devices)
@@ -1370,8 +1373,10 @@ struct btrfs_device *btrfs_scan_one_device(const char *path, fmode_t flags,
 
 	bytenr_orig = btrfs_sb_offset(0);
 	ret = btrfs_sb_log_location_bdev(bdev, 0, READ, &bytenr);
-	if (ret)
-		return ERR_PTR(ret);
+	if (ret) {
+		device = ERR_PTR(ret);
+		goto error_bdev_put;
+	}
 
 	disk_super = btrfs_read_disk_super(bdev, bytenr, bytenr_orig);
 	if (IS_ERR(disk_super)) {
@@ -2144,8 +2149,6 @@ int btrfs_rm_device(struct btrfs_fs_info *fs_info,
 	}
 
 	ret = btrfs_shrink_device(device, 0);
-	if (!ret)
-		btrfs_reada_remove_dev(device);
 	if (ret)
 		goto error_undo;
 
@@ -2243,7 +2246,6 @@ out:
 	return ret;
 
 error_undo:
-	btrfs_reada_undo_remove_dev(device);
 	if (test_bit(BTRFS_DEV_STATE_WRITEABLE, &device->dev_state)) {
 		mutex_lock(&fs_info->chunk_mutex);
 		list_add(&device->dev_alloc_list,
@@ -4390,7 +4392,7 @@ int btrfs_balance(struct btrfs_fs_info *fs_info,
 	mutex_lock(&fs_info->balance_mutex);
 	if (ret == -ECANCELED && atomic_read(&fs_info->balance_pause_req)) {
 		btrfs_info(fs_info, "balance: paused");
-		btrfs_exclop_pause_balance(fs_info);
+		btrfs_exclop_balance(fs_info, BTRFS_EXCLOP_BALANCE_PAUSED);
 	}
 	/*
 	 * Balance can be canceled by:
@@ -5541,7 +5543,6 @@ int btrfs_chunk_alloc_add_chunk_item(struct btrfs_trans_handle *trans,
 				     struct btrfs_block_group *bg)
 {
 	struct btrfs_fs_info *fs_info = trans->fs_info;
-	struct btrfs_root *extent_root = fs_info->extent_root;
 	struct btrfs_root *chunk_root = fs_info->chunk_root;
 	struct btrfs_key key;
 	struct btrfs_chunk *chunk;
@@ -5613,7 +5614,7 @@ int btrfs_chunk_alloc_add_chunk_item(struct btrfs_trans_handle *trans,
 	}
 
 	btrfs_set_stack_chunk_length(chunk, bg->length);
-	btrfs_set_stack_chunk_owner(chunk, extent_root->root_key.objectid);
+	btrfs_set_stack_chunk_owner(chunk, BTRFS_EXTENT_TREE_OBJECTID);
 	btrfs_set_stack_chunk_stripe_len(chunk, map->stripe_len);
 	btrfs_set_stack_chunk_type(chunk, map->type);
 	btrfs_set_stack_chunk_num_stripes(chunk, map->num_stripes);
@@ -6351,7 +6352,8 @@ int btrfs_get_io_geometry(struct btrfs_fs_info *fs_info, struct extent_map *em,
 	stripe_offset = offset - stripe_offset;
 	data_stripes = nr_data_stripes(map);
 
-	if (map->type & BTRFS_BLOCK_GROUP_PROFILE_MASK) {
+	/* Only stripe based profiles needs to check against stripe length. */
+	if (map->type & BTRFS_BLOCK_GROUP_STRIPE_MASK) {
 		u64 max_len = stripe_len - stripe_offset;
 
 		/*
@@ -6974,11 +6976,8 @@ struct btrfs_device *btrfs_alloc_device(struct btrfs_fs_info *fs_info,
 	INIT_LIST_HEAD(&dev->dev_alloc_list);
 	INIT_LIST_HEAD(&dev->post_commit_list);
 
-	atomic_set(&dev->reada_in_flight, 0);
 	atomic_set(&dev->dev_stats_ccnt, 0);
 	btrfs_device_data_ordered_init(dev);
-	INIT_RADIX_TREE(&dev->reada_zones, GFP_NOFS & ~__GFP_DIRECT_RECLAIM);
-	INIT_RADIX_TREE(&dev->reada_extents, GFP_NOFS & ~__GFP_DIRECT_RECLAIM);
 	extent_io_tree_init(fs_info, &dev->alloc_state,
 			    IO_TREE_DEVICE_ALLOC_STATE, NULL);
 
@@ -8335,23 +8334,26 @@ out:
 	return ret;
 }
 
-int btrfs_repair_one_zone(struct btrfs_fs_info *fs_info, u64 logical)
+bool btrfs_repair_one_zone(struct btrfs_fs_info *fs_info, u64 logical)
 {
 	struct btrfs_block_group *cache;
 
+	if (!btrfs_is_zoned(fs_info))
+		return false;
+
 	/* Do not attempt to repair in degraded state */
 	if (btrfs_test_opt(fs_info, DEGRADED))
-		return 0;
+		return true;
 
 	cache = btrfs_lookup_block_group(fs_info, logical);
 	if (!cache)
-		return 0;
+		return true;
 
 	spin_lock(&cache->lock);
 	if (cache->relocating_repair) {
 		spin_unlock(&cache->lock);
 		btrfs_put_block_group(cache);
-		return 0;
+		return true;
 	}
 	cache->relocating_repair = 1;
 	spin_unlock(&cache->lock);
@@ -8359,5 +8361,5 @@ int btrfs_repair_one_zone(struct btrfs_fs_info *fs_info, u64 logical)
 	kthread_run(relocating_repair_kthread, cache,
 		    "btrfs-relocating-repair");
 
-	return 0;
+	return true;
 }

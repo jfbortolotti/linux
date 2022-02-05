@@ -169,6 +169,10 @@ static noinline void switch_commit_roots(struct btrfs_trans_handle *trans)
 	ASSERT(cur_trans->state == TRANS_STATE_COMMIT_DOING);
 
 	down_write(&fs_info->commit_root_sem);
+
+	if (test_bit(BTRFS_FS_RELOC_RUNNING, &fs_info->flags))
+		fs_info->last_reloc_trans = trans->transid;
+
 	list_for_each_entry_safe(root, tmp, &cur_trans->switch_commits,
 				 dirty_list) {
 		list_del_init(&root->dirty_list);
@@ -419,7 +423,6 @@ static int record_root_in_trans(struct btrfs_trans_handle *trans,
 
 	if ((test_bit(BTRFS_ROOT_SHAREABLE, &root->state) &&
 	    root->last_trans < trans->transid) || force) {
-		WARN_ON(root == fs_info->extent_root);
 		WARN_ON(!force && root->commit_root != root->node);
 
 		/*
@@ -698,7 +701,6 @@ again:
 
 	h->transid = cur_trans->transid;
 	h->transaction = cur_trans;
-	h->root = root;
 	refcount_set(&h->use_count, 1);
 	h->fs_info = root->fs_info;
 
@@ -1081,7 +1083,8 @@ int btrfs_write_marked_extents(struct btrfs_fs_info *fs_info,
  * on all the pages and clear them from the dirty pages state tree
  */
 static int __btrfs_wait_marked_extents(struct btrfs_fs_info *fs_info,
-				       struct extent_io_tree *dirty_pages)
+				       struct extent_io_tree *dirty_pages,
+				       bool is_log_tree)
 {
 	int err = 0;
 	int werr = 0;
@@ -1099,8 +1102,22 @@ static int __btrfs_wait_marked_extents(struct btrfs_fs_info *fs_info,
 		 * after committing the log because the tree can be accessed
 		 * concurrently - we do it only at transaction commit time when
 		 * it's safe to do it (through extent_io_tree_release()).
+		 *
+		 * For a log tree, we convert the range bit so that we know
+		 * about the range of log tree extent buffers even after they
+		 * were written, so that if a transaction abort happens we
+		 * know about the logical bytenr of the extents and can free
+		 * them up, releasing reserved space in their block groups and
+		 * in the metadata space_info. Ignore any errors in this case,
+		 * we have no way to handle them, if they happen they are
+		 * harmless, they only result in some warnings during unmount.
 		 */
-		err = clear_extent_bit(dirty_pages, start, end,
+		if (is_log_tree)
+			convert_extent_bit(dirty_pages, start, end,
+					   EXTENT_UPTODATE, EXTENT_NEED_WAIT,
+					   &cached_state);
+		else
+			err = clear_extent_bit(dirty_pages, start, end,
 				       EXTENT_NEED_WAIT, 0, 0, &cached_state);
 		if (err == -ENOMEM)
 			err = 0;
@@ -1124,7 +1141,7 @@ static int btrfs_wait_extents(struct btrfs_fs_info *fs_info,
 	bool errors = false;
 	int err;
 
-	err = __btrfs_wait_marked_extents(fs_info, dirty_pages);
+	err = __btrfs_wait_marked_extents(fs_info, dirty_pages, false);
 	if (test_and_clear_bit(BTRFS_FS_BTREE_ERR, &fs_info->flags))
 		errors = true;
 
@@ -1142,7 +1159,7 @@ int btrfs_wait_tree_log_extents(struct btrfs_root *log_root, int mark)
 
 	ASSERT(log_root->root_key.objectid == BTRFS_TREE_LOG_OBJECTID);
 
-	err = __btrfs_wait_marked_extents(fs_info, dirty_pages);
+	err = __btrfs_wait_marked_extents(fs_info, dirty_pages, true);
 	if ((mark & EXTENT_DIRTY) &&
 	    test_and_clear_bit(BTRFS_FS_LOG1_ERR, &fs_info->flags))
 		errors = true;
@@ -1279,9 +1296,8 @@ again:
 		root = list_entry(next, struct btrfs_root, dirty_list);
 		clear_bit(BTRFS_ROOT_DIRTY, &root->state);
 
-		if (root != fs_info->extent_root)
-			list_add_tail(&root->dirty_list,
-				      &trans->transaction->switch_commits);
+		list_add_tail(&root->dirty_list,
+			      &trans->transaction->switch_commits);
 		ret = update_cowonly_root(trans, root);
 		if (ret)
 			return ret;
@@ -1310,9 +1326,6 @@ again:
 
 	if (!list_empty(&fs_info->dirty_cowonly_roots))
 		goto again;
-
-	list_add_tail(&fs_info->extent_root->dirty_list,
-		      &trans->transaction->switch_commits);
 
 	/* Update dev-replace pointer once everything is committed */
 	fs_info->dev_replace.committed_cursor_left =
@@ -1880,50 +1893,14 @@ int btrfs_transaction_blocked(struct btrfs_fs_info *info)
 	return ret;
 }
 
-/*
- * commit transactions asynchronously. once btrfs_commit_transaction_async
- * returns, any subsequent transaction will not be allowed to join.
- */
-struct btrfs_async_commit {
-	struct btrfs_trans_handle *newtrans;
-	struct work_struct work;
-};
-
-static void do_async_commit(struct work_struct *work)
-{
-	struct btrfs_async_commit *ac =
-		container_of(work, struct btrfs_async_commit, work);
-
-	/*
-	 * We've got freeze protection passed with the transaction.
-	 * Tell lockdep about it.
-	 */
-	if (ac->newtrans->type & __TRANS_FREEZABLE)
-		__sb_writers_acquired(ac->newtrans->fs_info->sb, SB_FREEZE_FS);
-
-	current->journal_info = ac->newtrans;
-
-	btrfs_commit_transaction(ac->newtrans);
-	kfree(ac);
-}
-
-int btrfs_commit_transaction_async(struct btrfs_trans_handle *trans)
+void btrfs_commit_transaction_async(struct btrfs_trans_handle *trans)
 {
 	struct btrfs_fs_info *fs_info = trans->fs_info;
-	struct btrfs_async_commit *ac;
 	struct btrfs_transaction *cur_trans;
 
-	ac = kmalloc(sizeof(*ac), GFP_NOFS);
-	if (!ac)
-		return -ENOMEM;
-
-	INIT_WORK(&ac->work, do_async_commit);
-	ac->newtrans = btrfs_join_transaction(trans->root);
-	if (IS_ERR(ac->newtrans)) {
-		int err = PTR_ERR(ac->newtrans);
-		kfree(ac);
-		return err;
-	}
+	/* Kick the transaction kthread. */
+	set_bit(BTRFS_FS_COMMIT_TRANS, &fs_info->flags);
+	wake_up_process(fs_info->transaction_kthread);
 
 	/* take transaction reference */
 	cur_trans = trans->transaction;
@@ -1932,27 +1909,14 @@ int btrfs_commit_transaction_async(struct btrfs_trans_handle *trans)
 	btrfs_end_transaction(trans);
 
 	/*
-	 * Tell lockdep we've released the freeze rwsem, since the
-	 * async commit thread will be the one to unlock it.
-	 */
-	if (ac->newtrans->type & __TRANS_FREEZABLE)
-		__sb_writers_release(fs_info->sb, SB_FREEZE_FS);
-
-	schedule_work(&ac->work);
-	/*
 	 * Wait for the current transaction commit to start and block
 	 * subsequent transaction joins
 	 */
 	wait_event(fs_info->transaction_blocked_wait,
 		   cur_trans->state >= TRANS_STATE_COMMIT_START ||
 		   TRANS_ABORTED(cur_trans));
-	if (current->journal_info == trans)
-		current->journal_info = NULL;
-
 	btrfs_put_transaction(cur_trans);
-	return 0;
 }
-
 
 static void cleanup_transaction(struct btrfs_trans_handle *trans, int err)
 {
@@ -2005,7 +1969,7 @@ static void cleanup_transaction(struct btrfs_trans_handle *trans, int err)
 	btrfs_put_transaction(cur_trans);
 	btrfs_put_transaction(cur_trans);
 
-	trace_btrfs_transaction_commit(trans->root);
+	trace_btrfs_transaction_commit(fs_info);
 
 	if (current->journal_info == trans)
 		current->journal_info = NULL;
@@ -2219,6 +2183,13 @@ int btrfs_commit_transaction(struct btrfs_trans_handle *trans)
 	wait_event(cur_trans->writer_wait,
 		   atomic_read(&cur_trans->num_writers) == 1);
 
+	/*
+	 * We've started the commit, clear the flag in case we were triggered to
+	 * do an async commit but somebody else started before the transaction
+	 * kthread could do the work.
+	 */
+	clear_bit(BTRFS_FS_COMMIT_TRANS, &fs_info->flags);
+
 	if (TRANS_ABORTED(cur_trans)) {
 		ret = cur_trans->aborted;
 		goto scrub_continue;
@@ -2403,7 +2374,7 @@ int btrfs_commit_transaction(struct btrfs_trans_handle *trans)
 	if (trans->type & __TRANS_FREEZABLE)
 		sb_end_intwrite(fs_info->sb);
 
-	trace_btrfs_transaction_commit(trans->root);
+	trace_btrfs_transaction_commit(fs_info);
 
 	btrfs_scrub_continue(fs_info);
 

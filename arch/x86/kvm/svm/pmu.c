@@ -138,11 +138,15 @@ static inline struct kvm_pmc *get_gp_pmc_amd(struct kvm_pmu *pmu, u32 msr,
 	return &pmu->gp_counters[msr_to_index(msr)];
 }
 
-static unsigned amd_find_arch_event(struct kvm_pmu *pmu,
-				    u8 event_select,
-				    u8 unit_mask)
+static unsigned int amd_pmc_perf_hw_id(struct kvm_pmc *pmc)
 {
+	u8 event_select = pmc->eventsel & ARCH_PERFMON_EVENTSEL_EVENT;
+	u8 unit_mask = (pmc->eventsel & ARCH_PERFMON_EVENTSEL_UMASK) >> 8;
 	int i;
+
+	/* return PERF_COUNT_HW_MAX as AMD doesn't have fixed events */
+	if (WARN_ON(pmc_is_fixed(pmc)))
+		return PERF_COUNT_HW_MAX;
 
 	for (i = 0; i < ARRAY_SIZE(amd_event_mapping); i++)
 		if (amd_event_mapping[i].eventsel == event_select
@@ -153,12 +157,6 @@ static unsigned amd_find_arch_event(struct kvm_pmu *pmu,
 		return PERF_COUNT_HW_MAX;
 
 	return amd_event_mapping[i].event_type;
-}
-
-/* return PERF_COUNT_HW_MAX as AMD doesn't have fixed events */
-static unsigned amd_find_fixed_event(int idx)
-{
-	return PERF_COUNT_HW_MAX;
 }
 
 /* check if a PMC is enabled by comparing it against global_ctrl bits. Because
@@ -323,8 +321,7 @@ static void amd_pmu_reset(struct kvm_vcpu *vcpu)
 }
 
 struct kvm_pmu_ops amd_pmu_ops = {
-	.find_arch_event = amd_find_arch_event,
-	.find_fixed_event = amd_find_fixed_event,
+	.pmc_perf_hw_id = amd_pmc_perf_hw_id,
 	.pmc_is_enabled = amd_pmc_is_enabled,
 	.pmc_idx_to_pmc = amd_pmc_idx_to_pmc,
 	.rdpmc_ecx_to_pmc = amd_rdpmc_ecx_to_pmc,

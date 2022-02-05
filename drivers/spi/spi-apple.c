@@ -196,7 +196,7 @@ static void apple_spi_set_cs(struct spi_device *device, bool is_high)
 
 static bool apple_spi_prep_transfer(struct apple_spi *spi, struct spi_transfer *t)
 {
-	u32 cr;
+	u32 cr, fifo_threshold;
 
 	/* Calculate and program the clock rate */
 	cr = DIV_ROUND_UP(clk_get_rate(spi->clk), t->speed_hz);
@@ -212,7 +212,8 @@ static bool apple_spi_prep_transfer(struct apple_spi *spi, struct spi_transfer *
 	 *    bits_per_word * fifo_threshold / hz <= 5 * 10^-6
 	 *    200000 * bits_per_word * fifo_threshold <= hz
 	 */
-	return (200000 * t->bits_per_word * APPLE_SPI_FIFO_DEPTH / 2) <= t->speed_hz;
+	fifo_threshold = APPLE_SPI_FIFO_DEPTH / 2;
+	return (200000 * t->bits_per_word * fifo_threshold) <= t->speed_hz;
 }
 
 static irqreturn_t apple_spi_irq(int irq, void *dev_id)

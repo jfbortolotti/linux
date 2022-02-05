@@ -1594,6 +1594,15 @@ static void svm_set_rflags(struct kvm_vcpu *vcpu, unsigned long rflags)
 	to_svm(vcpu)->vmcb->save.rflags = rflags;
 }
 
+static bool svm_get_if_flag(struct kvm_vcpu *vcpu)
+{
+	struct vmcb *vmcb = to_svm(vcpu)->vmcb;
+
+	return sev_es_guest(vcpu->kvm)
+		? vmcb->control.int_state & SVM_GUEST_INTERRUPT_MASK
+		: kvm_get_rflags(vcpu) & X86_EFLAGS_IF;
+}
+
 static void svm_cache_reg(struct kvm_vcpu *vcpu, enum kvm_reg reg)
 {
 	kvm_register_mark_available(vcpu, reg);
@@ -1790,6 +1799,24 @@ static void svm_set_gdt(struct kvm_vcpu *vcpu, struct desc_ptr *dt)
 	svm->vmcb->save.gdtr.limit = dt->size;
 	svm->vmcb->save.gdtr.base = dt->address ;
 	vmcb_mark_dirty(svm->vmcb, VMCB_DT);
+}
+
+static void svm_post_set_cr3(struct kvm_vcpu *vcpu, unsigned long cr3)
+{
+	struct vcpu_svm *svm = to_svm(vcpu);
+
+	/*
+	 * For guests that don't set guest_state_protected, the cr3 update is
+	 * handled via kvm_mmu_load() while entering the guest. For guests
+	 * that do (SEV-ES/SEV-SNP), the cr3 update needs to be written to
+	 * VMCB save area now, since the save area will become the initial
+	 * contents of the VMSA, and future VMCB save area updates won't be
+	 * seen.
+	 */
+	if (sev_es_guest(vcpu->kvm)) {
+		svm->vmcb->save.cr3 = cr3;
+		vmcb_mark_dirty(svm->vmcb, VMCB_CR);
+	}
 }
 
 void svm_set_cr0(struct kvm_vcpu *vcpu, unsigned long cr0)
@@ -3583,14 +3610,7 @@ bool svm_interrupt_blocked(struct kvm_vcpu *vcpu)
 	if (!gif_set(svm))
 		return true;
 
-	if (sev_es_guest(vcpu->kvm)) {
-		/*
-		 * SEV-ES guests to not expose RFLAGS. Use the VMCB interrupt mask
-		 * bit to determine the state of the IF flag.
-		 */
-		if (!(vmcb->control.int_state & SVM_GUEST_INTERRUPT_MASK))
-			return true;
-	} else if (is_guest_mode(vcpu)) {
+	if (is_guest_mode(vcpu)) {
 		/* As long as interrupts are being delivered...  */
 		if ((svm->nested.ctl.int_ctl & V_INTR_MASKING_MASK)
 		    ? !(svm->vmcb01.ptr->save.rflags & X86_EFLAGS_IF)
@@ -3601,7 +3621,7 @@ bool svm_interrupt_blocked(struct kvm_vcpu *vcpu)
 		if (nested_exit_on_intr(svm))
 			return false;
 	} else {
-		if (!(kvm_get_rflags(vcpu) & X86_EFLAGS_IF))
+		if (!svm_get_if_flag(vcpu))
 			return true;
 	}
 
@@ -4622,6 +4642,7 @@ static struct kvm_x86_ops svm_x86_ops __initdata = {
 	.get_cpl = svm_get_cpl,
 	.get_cs_db_l_bits = kvm_get_cs_db_l_bits,
 	.set_cr0 = svm_set_cr0,
+	.post_set_cr3 = svm_post_set_cr3,
 	.is_valid_cr4 = svm_is_valid_cr4,
 	.set_cr4 = svm_set_cr4,
 	.set_efer = svm_set_efer,
@@ -4634,6 +4655,7 @@ static struct kvm_x86_ops svm_x86_ops __initdata = {
 	.cache_reg = svm_cache_reg,
 	.get_rflags = svm_get_rflags,
 	.set_rflags = svm_set_rflags,
+	.get_if_flag = svm_get_if_flag,
 
 	.tlb_flush_all = svm_flush_tlb,
 	.tlb_flush_current = svm_flush_tlb,

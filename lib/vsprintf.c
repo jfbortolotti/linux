@@ -52,6 +52,7 @@
 
 #include <linux/string_helpers.h>
 #include "kstrtox.h"
+#include "rust.h"
 
 static noinline unsigned long long simple_strntoull(const char *startp, size_t max_chars, char **endp, unsigned int base)
 {
@@ -2458,10 +2459,8 @@ char *pointer(const char *fmt, char *buf, char *end, void *ptr,
 		return device_node_string(buf, end, ptr, spec, fmt + 1);
 	case 'f':
 		return fwnode_string(buf, end, ptr, spec, fmt + 1);
-#ifdef CONFIG_RUST
 	case 'A':
 		return rust_fmt_argument(buf, end, ptr);
-#endif
 	case 'x':
 		return pointer_string(buf, end, ptr, spec);
 	case 'e':

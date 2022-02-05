@@ -21,6 +21,14 @@ static LIST_HEAD(mdev_head);
 static DEFINE_MUTEX(vdpa_dev_mutex);
 static DEFINE_IDA(vdpa_index_ida);
 
+void vdpa_set_status(struct vdpa_device *vdev, u8 status)
+{
+	mutex_lock(&vdev->cf_mutex);
+	vdev->config->set_status(vdev, status);
+	mutex_unlock(&vdev->cf_mutex);
+}
+EXPORT_SYMBOL(vdpa_set_status);
+
 static struct genl_family vdpa_nl_family;
 
 static int vdpa_dev_probe(struct device *d)
@@ -374,6 +382,21 @@ void vdpa_mgmtdev_unregister(struct vdpa_mgmt_dev *mdev)
 }
 EXPORT_SYMBOL_GPL(vdpa_mgmtdev_unregister);
 
+static void vdpa_get_config_unlocked(struct vdpa_device *vdev,
+				     unsigned int offset,
+				     void *buf, unsigned int len)
+{
+	const struct vdpa_config_ops *ops = vdev->config;
+
+	/*
+	 * Config accesses aren't supposed to trigger before features are set.
+	 * If it does happen we assume a legacy guest.
+	 */
+	if (!vdev->features_valid)
+		vdpa_set_features(vdev, 0, true);
+	ops->get_config(vdev, offset, buf, len);
+}
+
 /**
  * vdpa_get_config - Get one or more device configuration fields.
  * @vdev: vdpa device to operate on
@@ -384,16 +407,8 @@ EXPORT_SYMBOL_GPL(vdpa_mgmtdev_unregister);
 void vdpa_get_config(struct vdpa_device *vdev, unsigned int offset,
 		     void *buf, unsigned int len)
 {
-	const struct vdpa_config_ops *ops = vdev->config;
-
 	mutex_lock(&vdev->cf_mutex);
-	/*
-	 * Config accesses aren't supposed to trigger before features are set.
-	 * If it does happen we assume a legacy guest.
-	 */
-	if (!vdev->features_valid)
-		vdpa_set_features(vdev, 0);
-	ops->get_config(vdev, offset, buf, len);
+	vdpa_get_config_unlocked(vdev, offset, buf, len);
 	mutex_unlock(&vdev->cf_mutex);
 }
 EXPORT_SYMBOL_GPL(vdpa_get_config);
@@ -488,6 +503,16 @@ static int vdpa_mgmtdev_fill(const struct vdpa_mgmt_dev *mdev, struct sk_buff *m
 		err = -EMSGSIZE;
 		goto msg_err;
 	}
+	if (nla_put_u32(msg, VDPA_ATTR_DEV_MGMTDEV_MAX_VQS,
+			mdev->max_supported_vqs)) {
+		err = -EMSGSIZE;
+		goto msg_err;
+	}
+	if (nla_put_u64_64bit(msg, VDPA_ATTR_DEV_SUPPORTED_FEATURES,
+			      mdev->supported_features, VDPA_ATTR_PAD)) {
+		err = -EMSGSIZE;
+		goto msg_err;
+	}
 
 	genlmsg_end(msg, hdr);
 	return 0;
@@ -554,8 +579,9 @@ out:
 	return msg->len;
 }
 
-#define VDPA_DEV_NET_ATTRS_MASK ((1 << VDPA_ATTR_DEV_NET_CFG_MACADDR) | \
-				 (1 << VDPA_ATTR_DEV_NET_CFG_MTU))
+#define VDPA_DEV_NET_ATTRS_MASK (BIT_ULL(VDPA_ATTR_DEV_NET_CFG_MACADDR) | \
+				 BIT_ULL(VDPA_ATTR_DEV_NET_CFG_MTU)     | \
+				 BIT_ULL(VDPA_ATTR_DEV_NET_CFG_MAX_VQP))
 
 static int vdpa_nl_cmd_dev_add_set_doit(struct sk_buff *skb, struct genl_info *info)
 {
@@ -574,12 +600,22 @@ static int vdpa_nl_cmd_dev_add_set_doit(struct sk_buff *skb, struct genl_info *i
 	if (nl_attrs[VDPA_ATTR_DEV_NET_CFG_MACADDR]) {
 		macaddr = nla_data(nl_attrs[VDPA_ATTR_DEV_NET_CFG_MACADDR]);
 		memcpy(config.net.mac, macaddr, sizeof(config.net.mac));
-		config.mask |= (1 << VDPA_ATTR_DEV_NET_CFG_MACADDR);
+		config.mask |= BIT_ULL(VDPA_ATTR_DEV_NET_CFG_MACADDR);
 	}
 	if (nl_attrs[VDPA_ATTR_DEV_NET_CFG_MTU]) {
 		config.net.mtu =
 			nla_get_u16(nl_attrs[VDPA_ATTR_DEV_NET_CFG_MTU]);
-		config.mask |= (1 << VDPA_ATTR_DEV_NET_CFG_MTU);
+		config.mask |= BIT_ULL(VDPA_ATTR_DEV_NET_CFG_MTU);
+	}
+	if (nl_attrs[VDPA_ATTR_DEV_NET_CFG_MAX_VQP]) {
+		config.net.max_vq_pairs =
+			nla_get_u16(nl_attrs[VDPA_ATTR_DEV_NET_CFG_MAX_VQP]);
+		if (!config.net.max_vq_pairs) {
+			NL_SET_ERR_MSG_MOD(info->extack,
+					   "At least one pair of VQs is required");
+			return -EINVAL;
+		}
+		config.mask |= BIT_ULL(VDPA_ATTR_DEV_NET_CFG_MAX_VQP);
 	}
 
 	/* Skip checking capability if user didn't prefer to configure any
@@ -781,7 +817,7 @@ static int vdpa_dev_net_mq_config_fill(struct vdpa_device *vdev,
 {
 	u16 val_u16;
 
-	if ((features & (1ULL << VIRTIO_NET_F_MQ)) == 0)
+	if ((features & BIT_ULL(VIRTIO_NET_F_MQ)) == 0)
 		return 0;
 
 	val_u16 = le16_to_cpu(config->max_virtqueue_pairs);
@@ -794,7 +830,7 @@ static int vdpa_dev_net_config_fill(struct vdpa_device *vdev, struct sk_buff *ms
 	u64 features;
 	u16 val_u16;
 
-	vdpa_get_config(vdev, 0, &config, sizeof(config));
+	vdpa_get_config_unlocked(vdev, 0, &config, sizeof(config));
 
 	if (nla_put(msg, VDPA_ATTR_DEV_NET_CFG_MACADDR, sizeof(config.mac),
 		    config.mac))
@@ -808,7 +844,10 @@ static int vdpa_dev_net_config_fill(struct vdpa_device *vdev, struct sk_buff *ms
 	if (nla_put_u16(msg, VDPA_ATTR_DEV_NET_CFG_MTU, val_u16))
 		return -EMSGSIZE;
 
-	features = vdev->config->get_features(vdev);
+	features = vdev->config->get_driver_features(vdev);
+	if (nla_put_u64_64bit(msg, VDPA_ATTR_DEV_NEGOTIATED_FEATURES, features,
+			      VDPA_ATTR_PAD))
+		return -EMSGSIZE;
 
 	return vdpa_dev_net_mq_config_fill(vdev, msg, features, &config);
 }
@@ -819,12 +858,23 @@ vdpa_dev_config_fill(struct vdpa_device *vdev, struct sk_buff *msg, u32 portid, 
 {
 	u32 device_id;
 	void *hdr;
+	u8 status;
 	int err;
+
+	mutex_lock(&vdev->cf_mutex);
+	status = vdev->config->get_status(vdev);
+	if (!(status & VIRTIO_CONFIG_S_FEATURES_OK)) {
+		NL_SET_ERR_MSG_MOD(extack, "Features negotiation not completed");
+		err = -EAGAIN;
+		goto out;
+	}
 
 	hdr = genlmsg_put(msg, portid, seq, &vdpa_nl_family, flags,
 			  VDPA_CMD_DEV_CONFIG_GET);
-	if (!hdr)
-		return -EMSGSIZE;
+	if (!hdr) {
+		err = -EMSGSIZE;
+		goto out;
+	}
 
 	if (nla_put_string(msg, VDPA_ATTR_DEV_NAME, dev_name(&vdev->dev))) {
 		err = -EMSGSIZE;
@@ -848,11 +898,14 @@ vdpa_dev_config_fill(struct vdpa_device *vdev, struct sk_buff *msg, u32 portid, 
 	if (err)
 		goto msg_err;
 
+	mutex_unlock(&vdev->cf_mutex);
 	genlmsg_end(msg, hdr);
 	return 0;
 
 msg_err:
 	genlmsg_cancel(msg, hdr);
+out:
+	mutex_unlock(&vdev->cf_mutex);
 	return err;
 }
 

@@ -11,62 +11,124 @@ using sysfs attributes.
 Creating simulated chips
 ------------------------
 
-The gpio-sim module registers a configfs subsystem called 'gpio-sim'. It's a
-subsystem with committable items which means two subdirectories are created in
-the filesystem: pending and live. For more information on configfs and
-committable items, please refer to Documentation/filesystems/configfs.rst.
+The gpio-sim module registers a configfs subsystem called ``'gpio-sim'``. For
+details of the configfs filesystem, please refer to the configfs documentation.
 
-In order to instantiate a new simulated chip, the user needs to mkdir() a new
-directory in pending/. Inside each new directory, there's a set of attributes
-that can be used to configure the new chip. Once the configuration is complete,
-the user needs to use rename() to move the chip to the live/ directory. This
-creates and registers the new device.
+The user can create a hierarchy of configfs groups and items as well as modify
+values of exposed attributes. Once the chip is instantiated, this hierarchy
+will be translated to appropriate device properties. The general structure is:
 
-In order to destroy a simulated chip, it has to be moved back to pending first
-and then removed using rmdir().
+**Group:** ``/config/gpio-sim``
 
-Currently supported configuration attributes are:
+This is the top directory of the gpio-sim configfs tree.
 
-  num_lines - an unsigned integer value defining the number of GPIO lines to
-              export
+**Group:** ``/config/gpio-sim/gpio-device``
 
-  label - a string defining the label for the GPIO chip
+**Attribute:** ``/config/gpio-sim/gpio-device/dev_name``
 
-  line_names - a list of GPIO line names in the form of quoted strings
-               separated by commas, e.g.: '"foo", "bar", "", "foobar"'. The
-               number of strings doesn't have to be equal to the value set in
-               the num_lines attribute. If it's lower than the number of lines,
-               the remaining lines are unnamed. If it's larger, the superfluous
-               lines are ignored. A name of the form: '""' means the line
-               should be unnamed.
+**Attribute:** ``/config/gpio-sim/gpio-device/live``
 
-Additionally two read-only attributes named 'chip_name' and 'dev_name' are
-exposed in order to provide users with a mapping from configfs directories to
-the actual devices created in the kernel. The former returns the name of the
-GPIO device as assigned by gpiolib (i.e. "gpiochip0", "gpiochip1", etc.). The
-latter returns the parent device name as defined by the gpio-sim driver (i.e.
-"gpio-sim.0", "gpio-sim.1", etc.). This allows user-space to map the configfs
-items both to the correct character device file as well as the associated entry
-in sysfs.
+This is a directory representing a GPIO platform device. The ``'dev_name'``
+attribute is read-only and allows the user-space to read the platform device
+name (e.g. ``'gpio-sim.0'``). The ``'live'`` attribute allows to trigger the
+actual creation of the device once it's fully configured. The accepted values
+are: ``'1'`` to enable the simulated device and ``'0'`` to disable and tear
+it down.
+
+**Group:** ``/config/gpio-sim/gpio-device/gpio-bankX``
+
+**Attribute:** ``/config/gpio-sim/gpio-device/gpio-bankX/chip_name``
+
+**Attribute:** ``/config/gpio-sim/gpio-device/gpio-bankX/num_lines``
+
+This group represents a bank of GPIOs under the top platform device. The
+``'chip_name'`` attribute is read-only and allows the user-space to read the
+device name of the bank device. The ``'num_lines'`` attribute allows to specify
+the number of lines exposed by this bank.
+
+**Group:** ``/config/gpio-sim/gpio-device/gpio-bankX/lineY``
+
+**Attribute:** ``/config/gpio-sim/gpio-device/gpio-bankX/lineY/name``
+
+This group represents a single line at the offset Y. The 'name' attribute
+allows to set the line name as represented by the 'gpio-line-names' property.
+
+**Item:** ``/config/gpio-sim/gpio-device/gpio-bankX/lineY/hog``
+
+**Attribute:** ``/config/gpio-sim/gpio-device/gpio-bankX/lineY/hog/name``
+
+**Attribute:** ``/config/gpio-sim/gpio-device/gpio-bankX/lineY/hog/direction``
+
+This item makes the gpio-sim module hog the associated line. The ``'name'``
+attribute specifies the in-kernel consumer name to use. The ``'direction'``
+attribute specifies the hog direction and must be one of: ``'input'``,
+``'output-high'`` and ``'output-low'``.
+
+Inside each bank directory, there's a set of attributes that can be used to
+configure the new chip. Additionally the user can ``mkdir()`` subdirectories
+inside the chip's directory that allow to pass additional configuration for
+specific lines. The name of those subdirectories must take the form of:
+``'line<offset>'`` (e.g. ``'line0'``, ``'line20'``, etc.) as the name will be
+used by the module to assign the config to the specific line at given offset.
+
+Once the confiuration is complete, the ``'live'`` attribute must be set to 1 in
+order to instantiate the chip. It can be set back to 0 to destroy the simulated
+chip. The module will synchronously wait for the new simulated device to be
+successfully probed and if this doesn't happen, writing to ``'live'`` will
+result in an error.
 
 Simulated GPIO chips can also be defined in device-tree. The compatible string
-must be: "gpio-simulator". Supported properties are:
+must be: ``"gpio-simulator"``. Supported properties are:
 
-  "gpio-sim,label" - chip label
+  ``"gpio-sim,label"`` - chip label
 
-  "gpio-sim,nr-gpios" - number of lines
+Other standard GPIO properties (like ``"gpio-line-names"``, ``"ngpios"`` or
+``"gpio-hog"``) are also supported. Please refer to the GPIO documentation for
+details.
 
-Other standard GPIO properties (like "gpio-line-names" and gpio-hog) are also
-supported.
+An example device-tree code defining a GPIO simulator:
+
+.. code-block :: none
+
+    gpio-sim {
+        compatible = "gpio-simulator";
+
+        bank0 {
+            gpio-controller;
+            #gpio-cells = <2>;
+            ngpios = <16>;
+            gpio-sim,label = "dt-bank0";
+            gpio-line-names = "", "sim-foo", "", "sim-bar";
+        };
+
+        bank1 {
+            gpio-controller;
+            #gpio-cells = <2>;
+            ngpios = <8>;
+            gpio-sim,label = "dt-bank1";
+
+            line3 {
+                gpio-hog;
+                gpios = <3 0>;
+                output-high;
+                line-name = "sim-hog-from-dt";
+            };
+        };
+    };
 
 Manipulating simulated lines
 ----------------------------
 
-Each simulated GPIO chip creates a sysfs attribute group under its device
-directory called 'line-ctrl'. Inside each group, there's a separate attribute
-for each GPIO line. The name of the attribute is of the form 'gpioX' where X
-is the line's offset in the chip.
+Each simulated GPIO chip creates a separate sysfs group under its device
+directory for each exposed line
+(e.g. ``/sys/devices/platform/gpio-sim.X/gpiochipY/``). The name of each group
+is of the form: ``'sim_gpioX'`` where X is the offset of the line. Inside each
+group there are two attibutes:
 
-Reading from a line attribute returns the current value. Writing to it (0 or 1)
-changes the configuration of the simulated pull-up/pull-down resistor
-(1 - pull-up, 0 - pull-down).
+    ``pull`` - allows to read and set the current simulated pull setting for
+               every line, when writing the value must be one of: ``'pull-up'``,
+               ``'pull-down'``
+
+    ``value`` - allows to read the current value of the line which may be
+                different from the pull if the line is being driven from
+                user-space

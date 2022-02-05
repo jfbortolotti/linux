@@ -17,7 +17,7 @@ struct slab {
 	};
 	struct kmem_cache *slab_cache;
 	void *freelist;	/* array of free object indexes */
-	void * s_mem;	/* first object */
+	void *s_mem;	/* first object */
 	unsigned int active;
 
 #elif defined(CONFIG_SLUB)
@@ -48,10 +48,10 @@ struct slab {
 #elif defined(CONFIG_SLOB)
 
 	struct list_head slab_list;
-	void * __unused_1;
+	void *__unused_1;
 	void *freelist;		/* first free block */
-	void * __unused_2;
-	int units;
+	long units;
+	unsigned int __unused_2;
 
 #else
 #error "Unexpected slab allocator configured"
@@ -67,14 +67,8 @@ struct slab {
 	static_assert(offsetof(struct page, pg) == offsetof(struct slab, sl))
 SLAB_MATCH(flags, __page_flags);
 SLAB_MATCH(compound_head, slab_list);	/* Ensure bit 0 is clear */
-SLAB_MATCH(slab_list, slab_list);
 #ifndef CONFIG_SLOB
 SLAB_MATCH(rcu_head, rcu_head);
-SLAB_MATCH(slab_cache, slab_cache);
-#endif
-#ifdef CONFIG_SLAB
-SLAB_MATCH(s_mem, s_mem);
-SLAB_MATCH(active, active);
 #endif
 SLAB_MATCH(_refcount, __page_refcount);
 #ifdef CONFIG_MEMCG
@@ -441,10 +435,7 @@ static inline bool kmem_cache_debug_flags(struct kmem_cache *s, slab_flags_t fla
  * @slab: a pointer to the slab struct
  *
  * Returns a pointer to the object cgroups vector associated with the slab,
- * or NULL. This function assumes that the slab is known to have an
- * associated object cgroups vector. It's not safe to call this function
- * against slabs with underlying pages, which might have an associated memory
- * cgroup: e.g.  kernel stack pages.
+ * or NULL if no such vector has been associated yet.
  */
 static inline struct obj_cgroup **slab_objcgs(struct slab *slab)
 {
@@ -452,26 +443,6 @@ static inline struct obj_cgroup **slab_objcgs(struct slab *slab)
 
 	VM_BUG_ON_PAGE(memcg_data && !(memcg_data & MEMCG_DATA_OBJCGS),
 							slab_page(slab));
-	VM_BUG_ON_PAGE(memcg_data & MEMCG_DATA_KMEM, slab_page(slab));
-
-	return (struct obj_cgroup **)(memcg_data & ~MEMCG_DATA_FLAGS_MASK);
-}
-
-/*
- * slab_objcgs_check - get the object cgroups vector associated with a slab
- * @slab: a pointer to the slab struct
- *
- * Returns a pointer to the object cgroups vector associated with the slab, or
- * NULL. This function is safe to use if the underlying page can be directly
- * associated with a memory cgroup.
- */
-static inline struct obj_cgroup **slab_objcgs_check(struct slab *slab)
-{
-	unsigned long memcg_data = READ_ONCE(slab->memcg_data);
-
-	if (!memcg_data || !(memcg_data & MEMCG_DATA_OBJCGS))
-		return NULL;
-
 	VM_BUG_ON_PAGE(memcg_data & MEMCG_DATA_KMEM, slab_page(slab));
 
 	return (struct obj_cgroup **)(memcg_data & ~MEMCG_DATA_FLAGS_MASK);
@@ -582,7 +553,7 @@ static inline void memcg_slab_free_hook(struct kmem_cache *s_orig,
 		if (!slab)
 			continue;
 
-		objcgs = slab_objcgs_check(slab);
+		objcgs = slab_objcgs(slab);
 		if (!objcgs)
 			continue;
 
@@ -606,11 +577,6 @@ static inline void memcg_slab_free_hook(struct kmem_cache *s_orig,
 
 #else /* CONFIG_MEMCG_KMEM */
 static inline struct obj_cgroup **slab_objcgs(struct slab *slab)
-{
-	return NULL;
-}
-
-static inline struct obj_cgroup **slab_objcgs_check(struct slab *slab)
 {
 	return NULL;
 }
@@ -894,7 +860,9 @@ void __check_heap_object(const void *ptr, unsigned long n,
 #else
 static inline
 void __check_heap_object(const void *ptr, unsigned long n,
-			 const struct slab *slab, bool to_user) { }
+			 const struct slab *slab, bool to_user)
+{
+}
 #endif
 
 #endif /* MM_SLAB_H */

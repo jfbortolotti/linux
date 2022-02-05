@@ -1,21 +1,25 @@
 # SPDX-License-Identifier: GPL-2.0
 
 obj-$(CONFIG_RUST) += core.o compiler_builtins.o helpers.o
-extra-$(CONFIG_RUST) += exports_core_generated.h
+always-$(CONFIG_RUST) += exports_core_generated.h
 
-extra-$(CONFIG_RUST) += libmacros.so
+always-$(CONFIG_RUST) += libmacros.so
+no-clean-files += libmacros.so
 
-extra-$(CONFIG_RUST) += bindings_generated.rs bindings_helpers_generated.rs
+always-$(CONFIG_RUST) += bindings_generated.rs bindings_helpers_generated.rs
 obj-$(CONFIG_RUST) += alloc.o kernel.o
-extra-$(CONFIG_RUST) += exports_alloc_generated.h exports_kernel_generated.h
+always-$(CONFIG_RUST) += exports_alloc_generated.h exports_kernel_generated.h
 
 ifdef CONFIG_RUST_BUILD_ASSERT_DENY
-extra-$(CONFIG_RUST) += build_error.o
+always-$(CONFIG_RUST) += build_error.o
 else
 obj-$(CONFIG_RUST) += build_error.o
 endif
 
 obj-$(CONFIG_RUST) += exports.o
+
+# Avoids running `$(RUSTC)` for the sysroot when it may not be available.
+ifdef CONFIG_RUST
 
 ifeq ($(quiet),silent_)
 cargo_quiet=-q
@@ -188,29 +192,24 @@ else
 # bindgen relies on libclang to parse C. Ideally, bindgen would support a GCC
 # plugin backend and/or the Clang driver would be perfectly compatible with GCC.
 #
-# For the moment, here we are tweaking the flags on the fly. Some config
-# options may not work (e.g. `GCC_PLUGIN_RANDSTRUCT` if we end up using one
-# of those structs).
+# For the moment, here we are tweaking the flags on the fly. This is a hack,
+# and some kernel configurations may not work (e.g. `GCC_PLUGIN_RANDSTRUCT`
+# if we end up using one of those structs).
 bindgen_skip_c_flags := -mno-fp-ret-in-387 -mpreferred-stack-boundary=% \
 	-mskip-rax-setup -mgeneral-regs-only -msign-return-address=% \
 	-mindirect-branch=thunk-extern -mindirect-branch-register -mrecord-mcount \
-	-mabi=lp64 -mstack-protector-guard% -fconserve-stack -falign-jumps=% \
-	-falign-loops=% -femit-struct-debug-baseonly \
-	-fno-ipa-cp-clone -fno-ipa-sra -fno-partial-inlining \
-	-fplugin-arg-arm_ssp_per_task_plugin-% \
+	-mabi=lp64 -mstack-protector-guard% -mtraceback=no \
+	-mno-pointers-to-nested-functions -mno-string -mno-strict-align \
+	-fconserve-stack -falign-jumps=% -falign-loops=% \
+	-femit-struct-debug-baseonly -fno-ipa-cp-clone -fno-ipa-sra \
+	-fno-partial-inlining -fplugin-arg-arm_ssp_per_task_plugin-% \
 	-fno-reorder-blocks -fno-allow-store-data-races -fasan-shadow-offset=% \
 	-Wno-packed-not-aligned -Wno-format-truncation -Wno-format-overflow \
 	-Wno-stringop-truncation -Wno-unused-but-set-variable \
 	-Wno-stringop-overflow -Wno-restrict -Wno-maybe-uninitialized \
-	-Werror=designated-init -Wno-zero-length-bounds \
-	-Wno-alloc-size-larger-than --param=% --param asan-%
-
-# We need to keep the quotes for this one -- it comes from a `Kconfig`
-bindgen_skip_c_flags += "-Wimplicit-fallthrough=%"
-
-# PowerPC
-bindgen_skip_c_flags += -mtraceback=no -mno-pointers-to-nested-functions \
-	-mno-string -mno-strict-align
+	-Werror=designated-init -Wno-zero-length-bounds -Wimplicit-fallthrough=% \
+	-Wno-alloc-size-larger-than \
+	--param=% --param asan-%
 
 # Derived from `scripts/Makefile.clang`
 BINDGEN_TARGET_arm	:= arm-linux-gnueabi
@@ -307,8 +306,8 @@ quiet_cmd_rustc_library = $(if $(skip_clippy),RUSTC,$(RUSTC_OR_CLIPPY_QUIET)) L 
 	$(if $(rustc_objcopy),;$(OBJCOPY) $(rustc_objcopy) $@)
 
 # `$(rust_flags)` is passed in case the user added `--sysroot`.
-rustc_sysroot = $(shell $(RUSTC) $(rust_flags) --print sysroot)
-rustc_host_target = $(shell $(RUSTC) --version --verbose | grep -F 'host: ' | cut -d' ' -f2)
+rustc_sysroot := $(shell $(RUSTC) $(rust_flags) --print sysroot)
+rustc_host_target := $(shell $(RUSTC) --version --verbose | grep -F 'host: ' | cut -d' ' -f2)
 RUST_LIB_SRC ?= $(rustc_sysroot)/lib/rustlib/src/rust/library
 
 rust-analyzer:
@@ -340,14 +339,14 @@ $(objtree)/rust/kernel.o: $(srctree)/rust/kernel/lib.rs $(objtree)/rust/alloc.o 
     $(objtree)/rust/bindings_helpers_generated.rs FORCE
 	$(call if_changed_dep,rustc_library)
 
-# Targets that need to expand twice
-.SECONDEXPANSION:
 $(objtree)/rust/core.o: private skip_clippy = 1
-$(objtree)/rust/core.o: private skip_flags = -Dunreachable_pub
-$(objtree)/rust/core.o: private rustc_target_flags = $(core-cfgs)
-$(objtree)/rust/core.o: $$(RUST_LIB_SRC)/core/src/lib.rs FORCE
+$(objtree)/rust/core.o: private skip_flags = -Dunreachable_pub --edition=2021
+$(objtree)/rust/core.o: private rustc_target_flags = $(core-cfgs) --edition=2018
+$(objtree)/rust/core.o: $(RUST_LIB_SRC)/core/src/lib.rs FORCE
 	$(call if_changed_dep,rustc_library)
 
 rustdoc-core: private rustc_target_flags = $(core-cfgs)
-rustdoc-core: $$(RUST_LIB_SRC)/core/src/lib.rs FORCE
+rustdoc-core: $(RUST_LIB_SRC)/core/src/lib.rs FORCE
 	$(call if_changed,rustdoc)
+
+endif # CONFIG_RUST

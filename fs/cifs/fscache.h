@@ -14,22 +14,22 @@
 #include "cifsglob.h"
 
 /*
- * Auxiliary data attached to CIFS superblock within the cache
+ * Coherency data attached to CIFS volume within the cache
  */
-struct cifs_fscache_super_auxdata {
-	u64	resource_id;		/* unique server resource id */
+struct cifs_fscache_volume_coherency_data {
+	__le64	resource_id;		/* unique server resource id */
 	__le64	vol_create_time;
-	u32	vol_serial_number;
+	__le32	vol_serial_number;
 } __packed;
 
 /*
- * Auxiliary data attached to CIFS inode within the cache
+ * Coherency data attached to CIFS inode within the cache.
  */
-struct cifs_fscache_inode_auxdata {
-	u64 last_write_time_sec;
-	u64 last_change_time_sec;
-	u32 last_write_time_nsec;
-	u32 last_change_time_nsec;
+struct cifs_fscache_inode_coherency_data {
+	__le64 last_write_time_sec;
+	__le64 last_change_time_sec;
+	__le32 last_write_time_nsec;
+	__le32 last_change_time_nsec;
 };
 
 #ifdef CONFIG_CIFS_FSCACHE
@@ -45,16 +45,16 @@ extern void cifs_fscache_release_inode_cookie(struct inode *);
 extern void cifs_fscache_unuse_inode_cookie(struct inode *, bool);
 
 static inline
-void cifs_fscache_fill_auxdata(struct inode *inode,
-			       struct cifs_fscache_inode_auxdata *auxdata)
+void cifs_fscache_fill_coherency(struct inode *inode,
+				 struct cifs_fscache_inode_coherency_data *cd)
 {
 	struct cifsInodeInfo *cifsi = CIFS_I(inode);
 
-	memset(&auxdata, 0, sizeof(auxdata));
-	auxdata->last_write_time_sec   = cifsi->vfs_inode.i_mtime.tv_sec;
-	auxdata->last_write_time_nsec  = cifsi->vfs_inode.i_mtime.tv_nsec;
-	auxdata->last_change_time_sec  = cifsi->vfs_inode.i_ctime.tv_sec;
-	auxdata->last_change_time_nsec = cifsi->vfs_inode.i_ctime.tv_nsec;
+	memset(cd, 0, sizeof(*cd));
+	cd->last_write_time_sec   = cpu_to_le64(cifsi->vfs_inode.i_mtime.tv_sec);
+	cd->last_write_time_nsec  = cpu_to_le32(cifsi->vfs_inode.i_mtime.tv_nsec);
+	cd->last_change_time_sec  = cpu_to_le64(cifsi->vfs_inode.i_ctime.tv_sec);
+	cd->last_change_time_nsec = cpu_to_le32(cifsi->vfs_inode.i_ctime.tv_nsec);
 }
 
 
@@ -100,8 +100,8 @@ static inline void cifs_readpage_to_fscache(struct inode *inode,
 
 #else /* CONFIG_CIFS_FSCACHE */
 static inline
-void cifs_fscache_fill_auxdata(struct inode *inode,
-			       struct cifs_fscache_inode_auxdata *auxdata)
+void cifs_fscache_fill_coherency(struct inode *inode,
+				 struct cifs_fscache_inode_coherency_data *cd)
 {
 }
 

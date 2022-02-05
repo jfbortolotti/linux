@@ -279,7 +279,7 @@ int afs_activate_volume(struct afs_volume *volume)
 	if (!name)
 		return -ENOMEM;
 
-	vcookie = fscache_acquire_volume(name, NULL, 0);
+	vcookie = fscache_acquire_volume(name, NULL, NULL, 0);
 	if (IS_ERR(vcookie)) {
 		if (vcookie != ERR_PTR(-EBUSY)) {
 			kfree(name);
@@ -302,7 +302,7 @@ void afs_deactivate_volume(struct afs_volume *volume)
 	_enter("%s", volume->name);
 
 #ifdef CONFIG_AFS_FSCACHE
-	fscache_relinquish_volume(volume->cache, 0,
+	fscache_relinquish_volume(volume->cache, NULL,
 				  test_bit(AFS_VOLUME_DELETED, &volume->flags));
 	volume->cache = NULL;
 #endif

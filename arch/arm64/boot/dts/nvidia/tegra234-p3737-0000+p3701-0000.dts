@@ -18,7 +18,7 @@
 		stdout-path = "serial0:115200n8";
 	};
 
-	tcu {
+	serial {
 		status = "okay";
 	};
 };

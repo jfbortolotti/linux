@@ -22,8 +22,7 @@ static bool __cachefiles_mark_inode_in_use(struct cachefiles_object *object,
 
 	if (!(inode->i_flags & S_KERNEL_FILE)) {
 		inode->i_flags |= S_KERNEL_FILE;
-		if (object)
-			trace_cachefiles_mark_active(object, inode);
+		trace_cachefiles_mark_active(object, inode);
 		can_use = true;
 	} else {
 		pr_notice("cachefiles: Inode already in use: %pd\n", dentry);
@@ -84,7 +83,8 @@ void cachefiles_unmark_inode_in_use(struct cachefiles_object *object,
  */
 struct dentry *cachefiles_get_directory(struct cachefiles_cache *cache,
 					struct dentry *dir,
-					const char *dirname)
+					const char *dirname,
+					bool *_is_new)
 {
 	struct dentry *subdir;
 	struct path path;
@@ -144,6 +144,8 @@ retry:
 
 		_debug("mkdir -> %pd{ino=%lu}",
 		       subdir, d_backing_inode(subdir)->i_ino);
+		if (_is_new)
+			*_is_new = true;
 	}
 
 	/* Tell rmdir() it's not allowed to delete the subdir */

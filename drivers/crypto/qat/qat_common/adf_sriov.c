@@ -8,6 +8,9 @@
 #include "adf_cfg.h"
 #include "adf_pfvf_pf_msg.h"
 
+#define ADF_VF2PF_RATELIMIT_INTERVAL	8
+#define ADF_VF2PF_RATELIMIT_BURST	130
+
 static struct workqueue_struct *pf2vf_resp_wq;
 
 struct adf_pf2vf_resp {
@@ -58,11 +61,12 @@ static int adf_enable_sriov(struct adf_accel_dev *accel_dev)
 		/* This ptr will be populated when VFs will be created */
 		vf_info->accel_dev = accel_dev;
 		vf_info->vf_nr = i;
+		vf_info->vf_compat_ver = 0;
 
 		mutex_init(&vf_info->pf2vf_lock);
 		ratelimit_state_init(&vf_info->vf2pf_ratelimit,
-				     DEFAULT_RATELIMIT_INTERVAL,
-				     DEFAULT_RATELIMIT_BURST);
+				     ADF_VF2PF_RATELIMIT_INTERVAL,
+				     ADF_VF2PF_RATELIMIT_BURST);
 	}
 
 	/* Set Valid bits in AE Thread to PCIe Function Mapping */
@@ -122,6 +126,32 @@ void adf_disable_sriov(struct adf_accel_dev *accel_dev)
 }
 EXPORT_SYMBOL_GPL(adf_disable_sriov);
 
+static int adf_sriov_prepare_restart(struct adf_accel_dev *accel_dev)
+{
+	char services[ADF_CFG_MAX_VAL_LEN_IN_BYTES] = {0};
+	int ret;
+
+	ret = adf_cfg_get_param_value(accel_dev, ADF_GENERAL_SEC,
+				      ADF_SERVICES_ENABLED, services);
+
+	adf_dev_stop(accel_dev);
+	adf_dev_shutdown(accel_dev);
+
+	if (!ret) {
+		ret = adf_cfg_section_add(accel_dev, ADF_GENERAL_SEC);
+		if (ret)
+			return ret;
+
+		ret = adf_cfg_add_key_value_param(accel_dev, ADF_GENERAL_SEC,
+						  ADF_SERVICES_ENABLED,
+						  services, ADF_STR);
+		if (ret)
+			return ret;
+	}
+
+	return 0;
+}
+
 /**
  * adf_sriov_configure() - Enable SRIOV for the device
  * @pdev:  Pointer to PCI device.
@@ -161,8 +191,9 @@ int adf_sriov_configure(struct pci_dev *pdev, int numvfs)
 			return -EBUSY;
 		}
 
-		adf_dev_stop(accel_dev);
-		adf_dev_shutdown(accel_dev);
+		ret = adf_sriov_prepare_restart(accel_dev);
+		if (ret)
+			return ret;
 	}
 
 	if (adf_cfg_section_add(accel_dev, ADF_KERNEL_SEC))

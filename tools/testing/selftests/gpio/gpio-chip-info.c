@@ -2,7 +2,7 @@
 /*
  * GPIO character device helper for reading chip information.
  *
- * Copyright (C) 2021 Bartosz Golaszewski <bgolaszewski@baylibre.com>
+ * Copyright (C) 2021 Bartosz Golaszewski <brgl@bgdev.pl>
  */
 
 #include <fcntl.h>
@@ -24,7 +24,7 @@ int main(int argc, char **argv)
 	struct gpiochip_info info;
 	int fd, ret;
 
-	if (argc !=3) {
+	if (argc != 3) {
 		print_usage();
 		return EXIT_FAILURE;
 	}

@@ -76,28 +76,7 @@ static inline bool can_madv_lru_vma(struct vm_area_struct *vma)
 	return !(vma->vm_flags & (VM_LOCKED|VM_HUGETLB|VM_PFNMAP));
 }
 
-/*
- * Parameter block passed down to zap_pte_range in exceptional cases.
- */
-struct zap_details {
-	struct address_space *zap_mapping;	/* Check page->mapping if set */
-	struct folio *single_folio;	/* Locked folio to be unmapped */
-};
-
-/*
- * We set details->zap_mappings when we want to unmap shared but keep private
- * pages. Return true if skip zapping this page, false otherwise.
- */
-static inline bool
-zap_skip_check_mapping(struct zap_details *details, struct page *page)
-{
-	if (!details || !page)
-		return false;
-
-	return details->zap_mapping &&
-	    (details->zap_mapping != page_rmapping(page));
-}
-
+struct zap_details;
 void unmap_page_range(struct mmu_gather *tlb,
 			     struct vm_area_struct *vma,
 			     unsigned long addr, unsigned long end,

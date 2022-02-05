@@ -12,9 +12,19 @@
 #include "cifs_fs_sb.h"
 #include "cifsproto.h"
 
+static void cifs_fscache_fill_volume_coherency(
+	struct cifs_tcon *tcon,
+	struct cifs_fscache_volume_coherency_data *cd)
+{
+	memset(cd, 0, sizeof(*cd));
+	cd->resource_id		= cpu_to_le64(tcon->resource_id);
+	cd->vol_create_time	= tcon->vol_create_time;
+	cd->vol_serial_number	= cpu_to_le32(tcon->vol_serial_number);
+}
+
 int cifs_fscache_get_super_cookie(struct cifs_tcon *tcon)
 {
-	struct cifs_fscache_super_auxdata auxdata;
+	struct cifs_fscache_volume_coherency_data cd;
 	struct TCP_Server_Info *server = tcon->ses->server;
 	struct fscache_volume *vcookie;
 	const struct sockaddr *sa = (struct sockaddr *)&server->dstaddr;
@@ -50,15 +60,10 @@ int cifs_fscache_get_super_cookie(struct cifs_tcon *tcon)
 	if (!key)
 		goto out;
 
-	memset(&auxdata, 0, sizeof(auxdata));
-	auxdata.resource_id = tcon->resource_id;
-	auxdata.vol_create_time = tcon->vol_create_time;
-	auxdata.vol_serial_number = tcon->vol_serial_number;
-	// TODO: Do something with the volume coherency data
-
+	cifs_fscache_fill_volume_coherency(tcon, &cd);
 	vcookie = fscache_acquire_volume(key,
 					 NULL, /* preferred_cache */
-					 0 /* coherency_data */);
+					 &cd, sizeof(cd));
 	cifs_dbg(FYI, "%s: (%s/0x%p)\n", __func__, key, vcookie);
 	if (IS_ERR(vcookie)) {
 		if (vcookie != ERR_PTR(-EBUSY)) {
@@ -80,46 +85,39 @@ out:
 
 void cifs_fscache_release_super_cookie(struct cifs_tcon *tcon)
 {
-	struct cifs_fscache_super_auxdata auxdata;
+	struct cifs_fscache_volume_coherency_data cd;
 
 	cifs_dbg(FYI, "%s: (0x%p)\n", __func__, tcon->fscache);
 
-	memset(&auxdata, 0, sizeof(auxdata));
-	auxdata.resource_id = tcon->resource_id;
-	auxdata.vol_create_time = tcon->vol_create_time;
-	auxdata.vol_serial_number = tcon->vol_serial_number;
-	// TODO: Do something with the volume coherency data
-
-	fscache_relinquish_volume(tcon->fscache,
-				  0, /* coherency_data */
-				  false);
+	cifs_fscache_fill_volume_coherency(tcon, &cd);
+	fscache_relinquish_volume(tcon->fscache, &cd, false);
 	tcon->fscache = NULL;
 }
 
 void cifs_fscache_get_inode_cookie(struct inode *inode)
 {
+	struct cifs_fscache_inode_coherency_data cd;
 	struct cifsInodeInfo *cifsi = CIFS_I(inode);
 	struct cifs_sb_info *cifs_sb = CIFS_SB(inode->i_sb);
 	struct cifs_tcon *tcon = cifs_sb_master_tcon(cifs_sb);
-	struct cifs_fscache_inode_auxdata auxdata;
 
-	cifs_fscache_fill_auxdata(&cifsi->vfs_inode, &auxdata);
+	cifs_fscache_fill_coherency(&cifsi->vfs_inode, &cd);
 
 	cifsi->fscache =
 		fscache_acquire_cookie(tcon->fscache, 0,
 				       &cifsi->uniqueid, sizeof(cifsi->uniqueid),
-				       &auxdata, sizeof(auxdata),
-				       cifsi->vfs_inode.i_size);
+				       &cd, sizeof(cd),
+				       i_size_read(&cifsi->vfs_inode));
 }
 
 void cifs_fscache_unuse_inode_cookie(struct inode *inode, bool update)
 {
 	if (update) {
-		struct cifs_fscache_inode_auxdata auxdata;
+		struct cifs_fscache_inode_coherency_data cd;
 		loff_t i_size = i_size_read(inode);
 
-		cifs_fscache_fill_auxdata(inode, &auxdata);
-		fscache_unuse_cookie(cifs_inode_cookie(inode), &auxdata, &i_size);
+		cifs_fscache_fill_coherency(inode, &cd);
+		fscache_unuse_cookie(cifs_inode_cookie(inode), &cd, &i_size);
 	} else {
 		fscache_unuse_cookie(cifs_inode_cookie(inode), NULL, NULL);
 	}

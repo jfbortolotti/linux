@@ -29,7 +29,8 @@ static struct otx2_cpt_bitmap get_cores_bmap(struct device *dev,
 	bool found = false;
 	int i;
 
-	if (eng_grp->g->engs_num > OTX2_CPT_MAX_ENGINES) {
+	if (eng_grp->g->engs_num < 0 ||
+	    eng_grp->g->engs_num > OTX2_CPT_MAX_ENGINES) {
 		dev_err(dev, "unsupported number of engines %d on octeontx2\n",
 			eng_grp->g->engs_num);
 		return bmap;
@@ -1514,16 +1515,6 @@ delete_grps:
 	return ret;
 }
 
-static void swap_engines(struct otx2_cpt_engines *engsl,
-			 struct otx2_cpt_engines *engsr)
-{
-	struct otx2_cpt_engines engs;
-
-	engs = *engsl;
-	*engsl = *engsr;
-	*engsr = engs;
-}
-
 int otx2_cpt_dl_custom_egrp_create(struct otx2_cptpf_dev *cptpf,
 				   struct devlink_param_gset_ctx *ctx)
 {
@@ -1624,7 +1615,7 @@ int otx2_cpt_dl_custom_egrp_create(struct otx2_cptpf_dev *cptpf,
 		}
 		/* Keep SE engines at zero index */
 		if (engs[1].type == OTX2_CPT_SE_TYPES)
-			swap_engines(&engs[0], &engs[1]);
+			swap(engs[0], engs[1]);
 	}
 	mutex_lock(&eng_grps->lock);
 
@@ -1695,7 +1686,7 @@ int otx2_cpt_dl_custom_egrp_delete(struct otx2_cptpf_dev *cptpf,
 	if (kstrtoint(tmp, 10, &egrp))
 		goto err_print;
 
-	if (egrp >= OTX2_CPT_MAX_ENGINE_GROUPS) {
+	if (egrp < 0 || egrp >= OTX2_CPT_MAX_ENGINE_GROUPS) {
 		dev_err(dev, "Invalid engine group %d", egrp);
 		return -EINVAL;
 	}

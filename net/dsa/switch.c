@@ -437,24 +437,6 @@ static int dsa_switch_fdb_del(struct dsa_switch *ds,
 	return dsa_port_do_fdb_del(dp, info->addr, info->vid);
 }
 
-static int dsa_switch_hsr_join(struct dsa_switch *ds,
-			       struct dsa_notifier_hsr_info *info)
-{
-	if (ds->index == info->sw_index && ds->ops->port_hsr_join)
-		return ds->ops->port_hsr_join(ds, info->port, info->hsr);
-
-	return -EOPNOTSUPP;
-}
-
-static int dsa_switch_hsr_leave(struct dsa_switch *ds,
-				struct dsa_notifier_hsr_info *info)
-{
-	if (ds->index == info->sw_index && ds->ops->port_hsr_leave)
-		return ds->ops->port_hsr_leave(ds, info->port, info->hsr);
-
-	return -EOPNOTSUPP;
-}
-
 static int dsa_switch_lag_change(struct dsa_switch *ds,
 				 struct dsa_notifier_lag_info *info)
 {
@@ -647,66 +629,57 @@ static int dsa_switch_change_tag_proto(struct dsa_switch *ds,
 	return 0;
 }
 
-static int dsa_switch_connect_tag_proto(struct dsa_switch *ds,
-					struct dsa_notifier_tag_proto_info *info)
+/* We use the same cross-chip notifiers to inform both the tagger side, as well
+ * as the switch side, of connection and disconnection events.
+ * Since ds->tagger_data is owned by the tagger, it isn't a hard error if the
+ * switch side doesn't support connecting to this tagger, and therefore, the
+ * fact that we don't disconnect the tagger side doesn't constitute a memory
+ * leak: the tagger will still operate with persistent per-switch memory, just
+ * with the switch side unconnected to it. What does constitute a hard error is
+ * when the switch side supports connecting but fails.
+ */
+static int
+dsa_switch_connect_tag_proto(struct dsa_switch *ds,
+			     struct dsa_notifier_tag_proto_info *info)
 {
 	const struct dsa_device_ops *tag_ops = info->tag_ops;
+	int err;
+
+	/* Notify the new tagger about the connection to this switch */
+	if (tag_ops->connect) {
+		err = tag_ops->connect(ds);
+		if (err)
+			return err;
+	}
 
 	if (!ds->ops->connect_tag_protocol)
 		return -EOPNOTSUPP;
 
-	return ds->ops->connect_tag_protocol(ds, tag_ops->proto);
-}
-
-static int dsa_switch_mrp_add(struct dsa_switch *ds,
-			      struct dsa_notifier_mrp_info *info)
-{
-	if (!ds->ops->port_mrp_add)
-		return -EOPNOTSUPP;
-
-	if (ds->index == info->sw_index)
-		return ds->ops->port_mrp_add(ds, info->port, info->mrp);
-
-	return 0;
-}
-
-static int dsa_switch_mrp_del(struct dsa_switch *ds,
-			      struct dsa_notifier_mrp_info *info)
-{
-	if (!ds->ops->port_mrp_del)
-		return -EOPNOTSUPP;
-
-	if (ds->index == info->sw_index)
-		return ds->ops->port_mrp_del(ds, info->port, info->mrp);
+	/* Notify the switch about the connection to the new tagger */
+	err = ds->ops->connect_tag_protocol(ds, tag_ops->proto);
+	if (err) {
+		/* Revert the new tagger's connection to this tree */
+		if (tag_ops->disconnect)
+			tag_ops->disconnect(ds);
+		return err;
+	}
 
 	return 0;
 }
 
 static int
-dsa_switch_mrp_add_ring_role(struct dsa_switch *ds,
-			     struct dsa_notifier_mrp_ring_role_info *info)
+dsa_switch_disconnect_tag_proto(struct dsa_switch *ds,
+				struct dsa_notifier_tag_proto_info *info)
 {
-	if (!ds->ops->port_mrp_add)
-		return -EOPNOTSUPP;
+	const struct dsa_device_ops *tag_ops = info->tag_ops;
 
-	if (ds->index == info->sw_index)
-		return ds->ops->port_mrp_add_ring_role(ds, info->port,
-						       info->mrp);
+	/* Notify the tagger about the disconnection from this switch */
+	if (tag_ops->disconnect && ds->tagger_data)
+		tag_ops->disconnect(ds);
 
-	return 0;
-}
-
-static int
-dsa_switch_mrp_del_ring_role(struct dsa_switch *ds,
-			     struct dsa_notifier_mrp_ring_role_info *info)
-{
-	if (!ds->ops->port_mrp_del)
-		return -EOPNOTSUPP;
-
-	if (ds->index == info->sw_index)
-		return ds->ops->port_mrp_del_ring_role(ds, info->port,
-						       info->mrp);
-
+	/* No need to notify the switch, since it shouldn't have any
+	 * resources to tear down
+	 */
 	return 0;
 }
 
@@ -737,12 +710,6 @@ static int dsa_switch_event(struct notifier_block *nb,
 		break;
 	case DSA_NOTIFIER_HOST_FDB_DEL:
 		err = dsa_switch_host_fdb_del(ds, info);
-		break;
-	case DSA_NOTIFIER_HSR_JOIN:
-		err = dsa_switch_hsr_join(ds, info);
-		break;
-	case DSA_NOTIFIER_HSR_LEAVE:
-		err = dsa_switch_hsr_leave(ds, info);
 		break;
 	case DSA_NOTIFIER_LAG_CHANGE:
 		err = dsa_switch_lag_change(ds, info);
@@ -780,17 +747,8 @@ static int dsa_switch_event(struct notifier_block *nb,
 	case DSA_NOTIFIER_TAG_PROTO_CONNECT:
 		err = dsa_switch_connect_tag_proto(ds, info);
 		break;
-	case DSA_NOTIFIER_MRP_ADD:
-		err = dsa_switch_mrp_add(ds, info);
-		break;
-	case DSA_NOTIFIER_MRP_DEL:
-		err = dsa_switch_mrp_del(ds, info);
-		break;
-	case DSA_NOTIFIER_MRP_ADD_RING_ROLE:
-		err = dsa_switch_mrp_add_ring_role(ds, info);
-		break;
-	case DSA_NOTIFIER_MRP_DEL_RING_ROLE:
-		err = dsa_switch_mrp_del_ring_role(ds, info);
+	case DSA_NOTIFIER_TAG_PROTO_DISCONNECT:
+		err = dsa_switch_disconnect_tag_proto(ds, info);
 		break;
 	case DSA_NOTIFIER_TAG_8021Q_VLAN_ADD:
 		err = dsa_switch_tag_8021q_vlan_add(ds, info);

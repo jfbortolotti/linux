@@ -135,7 +135,7 @@ static void llist_abort_desc(struct idxd_wq *wq, struct idxd_irq_entry *ie,
 	 */
 	list_for_each_entry_safe(d, t, &flist, list) {
 		list_del_init(&d->list);
-		idxd_dma_complete_txd(d, IDXD_COMPLETE_NORMAL, false);
+		idxd_dma_complete_txd(found, IDXD_COMPLETE_ABORT, true);
 	}
 }
 
@@ -193,12 +193,8 @@ int idxd_submit_desc(struct idxd_wq *wq, struct idxd_desc *desc)
 	 * that we designated the descriptor to.
 	 */
 	if (desc_flags & IDXD_OP_FLAG_RCI) {
-		ie = wq->ie;
-		if (ie->int_handle == INVALID_INT_HANDLE)
-			desc->hw->int_handle = ie->id;
-		else
-			desc->hw->int_handle = ie->int_handle;
-
+		ie = &wq->ie;
+		desc->hw->int_handle = ie->int_handle;
 		llist_add(&desc->llnode, &ie->pending_llist);
 	}
 

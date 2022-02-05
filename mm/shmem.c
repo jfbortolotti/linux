@@ -36,7 +36,6 @@
 #include <linux/uio.h>
 #include <linux/khugepaged.h>
 #include <linux/hugetlb.h>
-#include <linux/frontswap.h>
 #include <linux/fs_parser.h>
 #include <linux/swapfile.h>
 
@@ -738,11 +737,12 @@ static int shmem_add_to_page_cache(struct page *page,
 	cgroup_throttle_swaprate(page, gfp);
 
 	do {
-		void *entry;
 		xas_lock_irq(&xas);
-		while ((entry = xas_find_conflict(&xas)) != NULL) {
-			if (entry == expected)
-				continue;
+		if (expected != xas_find_conflict(&xas)) {
+			xas_set_err(&xas, -EEXIST);
+			goto unlock;
+		}
+		if (expected && xas_find_conflict(&xas)) {
 			xas_set_err(&xas, -EEXIST);
 			goto unlock;
 		}
@@ -894,6 +894,28 @@ void shmem_unlock_mapping(struct address_space *mapping)
 	}
 }
 
+static struct folio *shmem_get_partial_folio(struct inode *inode, pgoff_t index)
+{
+	struct folio *folio;
+	struct page *page;
+
+	/*
+	 * At first avoid shmem_getpage(,,,SGP_READ): that fails
+	 * beyond i_size, and reports fallocated pages as holes.
+	 */
+	folio = __filemap_get_folio(inode->i_mapping, index,
+					FGP_ENTRY | FGP_LOCK, 0);
+	if (!xa_is_value(folio))
+		return folio;
+	/*
+	 * But read a page back from swap if any of it is within i_size
+	 * (although in some cases this is just a waste of time).
+	 */
+	page = NULL;
+	shmem_getpage(inode, index, &page, SGP_READ);
+	return page ? page_folio(page) : NULL;
+}
+
 /*
  * Remove range of pages and swap entries from page cache, and free them.
  * If !unfalloc, truncate or punch hole; if unfalloc, undo failed fallocate.
@@ -908,6 +930,7 @@ static void shmem_undo_range(struct inode *inode, loff_t lstart, loff_t lend,
 	struct folio_batch fbatch;
 	pgoff_t indices[PAGEVEC_SIZE];
 	struct folio *folio;
+	bool same_folio;
 	long nr_swaps_freed = 0;
 	pgoff_t index;
 	int i;
@@ -947,18 +970,14 @@ static void shmem_undo_range(struct inode *inode, loff_t lstart, loff_t lend,
 		index++;
 	}
 
-	partial_end = ((lend + 1) % PAGE_SIZE) > 0;
-	shmem_get_folio(inode, lstart >> PAGE_SHIFT, &folio, SGP_READ);
+	same_folio = (lstart >> PAGE_SHIFT) == (lend >> PAGE_SHIFT);
+	folio = shmem_get_partial_folio(inode, lstart >> PAGE_SHIFT);
 	if (folio) {
-		bool same_page;
-
-		same_page = lend < folio_pos(folio) + folio_size(folio);
-		if (same_page)
-			partial_end = false;
+		same_folio = lend < folio_pos(folio) + folio_size(folio);
 		folio_mark_dirty(folio);
 		if (!truncate_inode_partial_folio(folio, lstart, lend)) {
 			start = folio->index + folio_nr_pages(folio);
-			if (same_page)
+			if (same_folio)
 				end = folio->index;
 		}
 		folio_unlock(folio);
@@ -966,8 +985,8 @@ static void shmem_undo_range(struct inode *inode, loff_t lstart, loff_t lend,
 		folio = NULL;
 	}
 
-	if (partial_end)
-		shmem_get_folio(inode, end, &folio, SGP_READ);
+	if (!same_folio)
+		folio = shmem_get_partial_folio(inode, lend >> PAGE_SHIFT);
 	if (folio) {
 		folio_mark_dirty(folio);
 		if (!truncate_inode_partial_folio(folio, lstart, lend))
@@ -1146,7 +1165,7 @@ static void shmem_evict_inode(struct inode *inode)
 static int shmem_find_swap_entries(struct address_space *mapping,
 				   pgoff_t start, unsigned int nr_entries,
 				   struct page **entries, pgoff_t *indices,
-				   unsigned int type, bool frontswap)
+				   unsigned int type)
 {
 	XA_STATE(xas, &mapping->i_pages, start);
 	struct page *page;
@@ -1166,9 +1185,6 @@ static int shmem_find_swap_entries(struct address_space *mapping,
 
 		entry = radix_to_swp_entry(page);
 		if (swp_type(entry) != type)
-			continue;
-		if (frontswap &&
-		    !frontswap_test(swap_info[type], swp_offset(entry)))
 			continue;
 
 		indices[ret] = xas.xa_index;
@@ -1222,26 +1238,20 @@ static int shmem_unuse_swap_entries(struct inode *inode, struct pagevec pvec,
 /*
  * If swap found in inode, free it and move page from swapcache to filecache.
  */
-static int shmem_unuse_inode(struct inode *inode, unsigned int type,
-			     bool frontswap, unsigned long *fs_pages_to_unuse)
+static int shmem_unuse_inode(struct inode *inode, unsigned int type)
 {
 	struct address_space *mapping = inode->i_mapping;
 	pgoff_t start = 0;
 	struct pagevec pvec;
 	pgoff_t indices[PAGEVEC_SIZE];
-	bool frontswap_partial = (frontswap && *fs_pages_to_unuse > 0);
 	int ret = 0;
 
 	pagevec_init(&pvec);
 	do {
 		unsigned int nr_entries = PAGEVEC_SIZE;
 
-		if (frontswap_partial && *fs_pages_to_unuse < PAGEVEC_SIZE)
-			nr_entries = *fs_pages_to_unuse;
-
 		pvec.nr = shmem_find_swap_entries(mapping, start, nr_entries,
-						  pvec.pages, indices,
-						  type, frontswap);
+						  pvec.pages, indices, type);
 		if (pvec.nr == 0) {
 			ret = 0;
 			break;
@@ -1250,14 +1260,6 @@ static int shmem_unuse_inode(struct inode *inode, unsigned int type,
 		ret = shmem_unuse_swap_entries(inode, pvec, indices);
 		if (ret < 0)
 			break;
-
-		if (frontswap_partial) {
-			*fs_pages_to_unuse -= ret;
-			if (*fs_pages_to_unuse == 0) {
-				ret = FRONTSWAP_PAGES_UNUSED;
-				break;
-			}
-		}
 
 		start = indices[pvec.nr - 1];
 	} while (true);
@@ -1270,8 +1272,7 @@ static int shmem_unuse_inode(struct inode *inode, unsigned int type,
  * device 'type' back into memory, so the swap device can be
  * unused.
  */
-int shmem_unuse(unsigned int type, bool frontswap,
-		unsigned long *fs_pages_to_unuse)
+int shmem_unuse(unsigned int type)
 {
 	struct shmem_inode_info *info, *next;
 	int error = 0;
@@ -1294,8 +1295,7 @@ int shmem_unuse(unsigned int type, bool frontswap,
 		atomic_inc(&info->stop_eviction);
 		mutex_unlock(&shmem_swaplist_mutex);
 
-		error = shmem_unuse_inode(&info->vfs_inode, type, frontswap,
-					  fs_pages_to_unuse);
+		error = shmem_unuse_inode(&info->vfs_inode, type);
 		cond_resched();
 
 		mutex_lock(&shmem_swaplist_mutex);
@@ -4009,8 +4009,7 @@ int __init shmem_init(void)
 	return 0;
 }
 
-int shmem_unuse(unsigned int type, bool frontswap,
-		unsigned long *fs_pages_to_unuse)
+int shmem_unuse(unsigned int type)
 {
 	return 0;
 }
