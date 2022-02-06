@@ -180,7 +180,7 @@ static int spmi_del_controller(struct platform_device *pdev)
 }
 
 static const struct of_device_id spmi_controller_match_table[] = {
-	{.compatible = "apple,t8103-spmi",},
+	{.compatible = "apple,spmi",},
 	{}
 };
 MODULE_DEVICE_TABLE(of, spmi_controller_match_table);
