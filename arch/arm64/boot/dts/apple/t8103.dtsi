@@ -202,7 +202,7 @@
 		};
 
 		spmi0: spmi@23d0d9300 {
-			compatible = "apple,t8103-spmi";
+			compatible = "apple,t8103-spmi","apple,spmi";
 			reg = <0x2 0x3d0d9300 0x0 0x100>;
 			#address-cells = <2>;
 			#size-cells = <0>;
