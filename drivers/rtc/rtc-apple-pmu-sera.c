@@ -160,7 +160,7 @@ static int pmu_sera_rtc_probe(struct platform_device *pdev)
 }
 
 static const struct of_device_id apple_pmu_sera_id[] = {
-	{ .compatible = "apple,pmu-sera-rtc", },
+	{ .compatible = "apple,sera-pmu-rtc", },
 	{},
 };
 MODULE_DEVICE_TABLE(of, apple_pmu_sera_id);
@@ -168,7 +168,7 @@ MODULE_DEVICE_TABLE(of, apple_pmu_sera_id);
 static struct platform_driver pmu_sera_rtc_driver = {
     .probe = pmu_sera_rtc_probe,
 	.driver = {
-		.name = "apple-pmu-sera-rtc",
+		.name = "apple-sera-pmu-rtc",
         .of_match_table	= apple_pmu_sera_id,
 
 	},
