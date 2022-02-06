@@ -49,14 +49,14 @@ static int apple_spmi_sera_pmu_probe(struct spmi_device *sdev)
 }
 
 static const struct of_device_id sera_pmu_id_table[] = {
-	{ .compatible = "apple,spmi-sera-pmu" },
+	{ .compatible = "apple,sera-pmu" },
 	{}
 };
 MODULE_DEVICE_TABLE(of, sera_pmu_id_table);
 
 static struct spmi_driver apple_spmi_sera_pmu_driver = {
 	.driver = {
-		.name	= "apple-spmi-sera-pmu",
+		.name	= "apple-sera-pmu",
 		.of_match_table = sera_pmu_id_table,
 	},
 	.probe	= apple_spmi_sera_pmu_probe,
