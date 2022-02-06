@@ -212,7 +212,7 @@
 				reg = <0xf SPMI_USID>;
 
 				rtc@0 {
-					compatible = "apple,pmu-sera-rtc";
+					compatible = "apple,sera-pmu-rtc";
 				};
 			};
 		};
