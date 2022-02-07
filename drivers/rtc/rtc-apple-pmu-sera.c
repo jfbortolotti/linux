@@ -6,11 +6,12 @@
  *
  * Inspired by:
  *		OpenBSD support Copyright (c) 2021 Mark Kettenis <kettenis@openbsd.org>
- *		Correllium support Copyright (C) 2021 Corellium LLC
+ *		Corellium support Copyright (C) 2021 Corellium LLC
  */
 
 #include <linux/mod_devicetable.h>
 #include <linux/module.h>
+#include <linux/byteorder/generic.h>
 #include <linux/platform_device.h>
 #include <linux/regmap.h>
 #include <linux/rtc.h>
@@ -31,32 +32,27 @@ struct pmu_sera_rtc {
 static u64 read_rtc(struct device *dev)
 {
 	int rc;
-	u8 value[6];
-	u64 secs,rtc_time,rtc_offset;
+	u64 secs;
+	u64 rtc_time = 0;
+	u64 rtc_offset = 0;
 	struct pmu_sera_rtc *rtc_dd = dev_get_drvdata(dev);
 
 	rc = regmap_bulk_read(rtc_dd->regmap, RTC_RUNNING_TIME_ADDR,
-							value, sizeof(value));
+							&rtc_time, 6);
 	if (rc) {
 		dev_err(dev, "RTC read data register failed: error: %d\n",rc);
 		return rc;
 	}
-
-	rtc_time = (((u64)value[5])<<40) | (((u64)value[4])<<32)
-				| (((u64)value[3])<<24) | (((u64)value[2])<<16)
-				| (((u64)value[1])<<8) | ((u64)value[0]);
-
+	//rtc_time = be64_to_cpu(rtc_time);
 
 	rc = regmap_bulk_read(rtc_dd->regmap, RTC_OFFSET_ADDR,
-							value, sizeof(value));
+							&rtc_offset, 6);
 	if (rc) {
 		dev_err(dev, "RTC read data register failed: error: %d\n",rc);
 		return rc;
 	}
 
-	rtc_offset = (((u64)value[5])<<40) | (((u64)value[4])<<32)
-				| (((u64)value[3])<<24) | (((u64)value[2])<<16)
-				| (((u64)value[1])<<8) | ((u64)value[0]);
+	//rtc_offset = be64_to_cpu(rtc_offset);
 
 	/* rtc_time is 32.16 fixed point
 		rtc__offset is 32.15 fixed point */
@@ -68,32 +64,28 @@ static u64 read_rtc(struct device *dev)
 
 static int set_rtc(struct device *dev,u64 t)
 {
-	int rc,idx;
-	u8 value[6];
-	u64 rtc_time,new_rtc_offset;
+	int rc;
+	u64 rtc_time = 0;
+	u64 new_rtc_offset = 0;
 	struct pmu_sera_rtc *rtc_dd = dev_get_drvdata(dev);
 
 	/* Let's read current time register */
 	rc = regmap_bulk_read(rtc_dd->regmap, RTC_RUNNING_TIME_ADDR,
-						 value, sizeof(value));
+						 &rtc_time, 6);
 	if (rc) {
 		dev_err(dev, "RTC read data register failed: error: %d\n",rc);
 		return rc;
 	}
-
-	rtc_time = (((u64)value[5])<<40) | (((u64)value[4])<<32)
-				| (((u64)value[3])<<24) | (((u64)value[2])<<16)
-				| (((u64)value[1])<<8) | ((u64)value[0]);
+	//rtc_time = be64_to_cpu(rtc_time);
 
 	/* rtc_time is 32.16 fixed point
 		rtc__offset is 32.15 fixed point */
-    new_rtc_offset = ((t<<16)-rtc_time)>>1;
+	new_rtc_offset = ((t<<16)-rtc_time)>>1;
 
-	for(idx=0;idx<6;idx+=1)
-		value[idx] = ((0xffull<<(idx*8)) & new_rtc_offset)>>(idx*8);
+	//new_rtc_offset = cpu_to_be64(new_rtc_offset);
 
 	rc = regmap_bulk_write(rtc_dd->regmap, RTC_OFFSET_ADDR,
-							value, sizeof(value));
+							&new_rtc_offset, 6);
 	if (rc) {
 		dev_err(dev, "RTC read data register failed: error: %d\n",rc);
 		return rc;
@@ -101,7 +93,6 @@ static int set_rtc(struct device *dev,u64 t)
 
 	return 0;
 }
-
 
 static int pmu_sera_get_time(struct device *dev, struct rtc_time *tm)
 {
