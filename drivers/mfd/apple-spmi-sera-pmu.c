@@ -24,7 +24,6 @@ static const struct regmap_config regmap_config = {
 	.reg_bits	= 16,
 	.val_bits	= BITS_PER_BYTE,
 	.max_register	= 0xffff,
-	.fast_io	= true
 };
 
 static int apple_spmi_sera_pmu_probe(struct spmi_device *sdev)
