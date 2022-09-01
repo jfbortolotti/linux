@@ -661,6 +661,10 @@
 			};
 		};
 
+		smc_hwmon: smc_hwmon {
+			compatible = "apple,smc-hwmon";
+		};
+
 		pinctrl_smc: pinctrl@23e820000 {
 			compatible = "apple,t8103-pinctrl", "apple,pinctrl";
 			reg = <0x2 0x3e820000 0x0 0x4000>;
