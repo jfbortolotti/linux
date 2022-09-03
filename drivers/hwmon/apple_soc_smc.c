@@ -21,34 +21,90 @@ struct macsmc_hwmon {
 	struct device *hwmon_dev;
 };
 
-static u32 convert_float_celsius_to_int_millicelsius(u32 flt){
+static u32 convert_float_to_int(u32 flt){
     unsigned int sign,exp,mant;
     unsigned long val;
     int i,b;
-	u32 result;
+	s32 result;
 
     sign=flt>>31;
     exp=flt>>23;
     mant=flt<<9>>9;
 
-	val=0;
-    for(i=22;i>=0;i-=1){
-        b=(mant&(1<<i))>>i;
-        val+=b*(1000000000>>(23-i));
-    }
-    result = ((val+1000000000)<<(exp-127))/1000000;
+	result = 0;
+	val = 0;
+	if (exp == 0 && mant != 0) {
+		for(i=22;i>=0;i-=1){
+			b=(mant&(1<<i))>>i;
+			val+=b*(1000000000>>(23-i));
+	    }
+		if (exp > 127)
+			result = (val<<(exp-127))/1000000;
+		else
+			result = (val>>(127-exp))/1000000;
+	}
+	else if (!(exp == 0 && mant == 0)){
+		for(i=22;i>=0;i-=1){
+			b=(mant&(1<<i))>>i;
+			val+=b*(1000000000>>(23-i));
+	    }
+		if (exp > 127)
+			result = ((val+1000000000)<<(exp-127))/1000000;
+		else
+			result = ((val+1000000000)>>(127-exp))/1000000;
+	}
+	if (sign == 1)
+		result *= -1;
+
 	return result;
 }
 
-struct temp_info{
+
+struct channel_info{
 	u32 smc_key;
 	char label[60];
 };
 
 /* MBA M1 Platform name: #680: RPlt = (ch8*, 0x84) b'j313_8fs' */
+static const struct channel_info apple_soc_smc_curr_table[] = {
+	{SMC_KEY(IBLR),"Current (IBLR)"},
+	{SMC_KEY(ID0R),"Current (ID0R)"},
+	{SMC_KEY(IKBC),"Current (IKBC)"},
+	{SMC_KEY(IMVC),"Current (IMVC)"},
+	{SMC_KEY(IO3R),"Current (IO3R)"},
+	{SMC_KEY(IO5R),"Current (IO5R)"},
+	{SMC_KEY(IP0b),"Current (IP0b)"},
+	{SMC_KEY(IP0l),"Current (IP0l)"},
+	{SMC_KEY(IP1b),"Current (IP1b)"},
+	{SMC_KEY(IP2b),"Current (IP2b)"},
+	{SMC_KEY(IP3b),"Current (IP3b)"},
+	{SMC_KEY(IP3l),"Current (IP3l)"},
+	{SMC_KEY(IP7b),"Current (IP7b)"},
+	{SMC_KEY(IP7l),"Current (IP7l)"},
+	{SMC_KEY(IP8b),"Current (IP8b)"},
+	{SMC_KEY(IP9b),"Current (IP9b)"},
+	{SMC_KEY(IP9l),"Current (IP9l)"},
+	{SMC_KEY(IPBR),"Current (IPBR)"},
+	{SMC_KEY(IPbb),"Current (IPbb)"},
+	{SMC_KEY(IPeb),"Current (IPeb)"},
+	{SMC_KEY(IR4b),"Current (IR4b)"},
+	{SMC_KEY(IR4l),"Current (IR4l)"},
+	{SMC_KEY(IR5b),"Current (IR5b)"},
+	{SMC_KEY(IR6b),"Current (IR6b)"},
+	{SMC_KEY(IR8l),"Current (IR8l)"},
+	{SMC_KEY(IRab),"Current (IRab)"},
+	{SMC_KEY(IRbl),"Current (IRbl)"},
+	{SMC_KEY(IRcb),"Current (IRcb)"},
+	{SMC_KEY(IRcl),"Current (IRcl)"},
+	{SMC_KEY(IRdb),"Current (IRdb)"},
+	{SMC_KEY(IRkl),"Current (IRkl)"},
+	{SMC_KEY(IW3C),"Current (IW3C)"},
+	{SMC_KEY(Ib0f),"Current (Ib0f)"},
+	{SMC_KEY(Ib4f),"Current (Ib4f)"},
+	{SMC_KEY(Ib8f),"Current (Ib8f)"},
+};
 
-
-static const struct temp_info apple_soc_smc_temp_table[] = {
+static const struct channel_info apple_soc_smc_temp_table[] = {
 	{SMC_KEY(TSCD),"Temp SOC CORE AREA BACKSIDE(TSCD)"},
 	{SMC_KEY(TB0T),"Temp Battery TS_MAX(TB0T)"},
 	{SMC_KEY(TB1T),"Temp Battery TS1(TB1T)"},
@@ -149,126 +205,6 @@ static const struct temp_info apple_soc_smc_temp_table[] = {
 	{SMC_KEY(Ts2z),"Temp (Ts2z)"},
 	{SMC_KEY(TVA0),"Temp (TVA0)"},
 	{SMC_KEY(TVD0),"Temp (TVD0)"},
-	/*
-TH0T    LOWER LEFT CORNER OF NAND DEVICES
-TH0x    Max NAND Proximity Temp
-TIOP    I/O PROXIMITY
-TIOP    Thunderbolt Proximity
-TMVR    3.8V AON VR BETWEEN PHASE 2 AND PHASE3 MOSFETS
-TMVR - P3V8AON_THMSNS
-TPMP    MASTER PMU, BETWEEN BUCK0 AND BUCK1 INDUCTORS
-TPMP - MPMU
-TPSP    SLAVE PMU, BUCK10 INDUCTOR PROXIMITY
-TPSP - SPMU
-TSCD    SOC CORE AREA BACKSIDE (TOP)
-TVS0 - P1V8VDDH_THMSNS1?
-TVS1 - P1V8VDDH_THMSNS2?
-TVSx - P1V8VDDH_THMSNSx max
-TW0P    Airport Proximity
-TW0P    WLANBT, BACKSIDE
-TW0P - WLBT temperature
-Tc0b    SOC Avg w/offset Cluster Die Temp
-Th0x    Max NAND Proximity Temp
-Th1a    GPU Temp
-Th2a    PCPU Temp
-Ts1a    GPU MTR Die Temp
-Ts2a    PCPU MTR Die Temp
-
-	 * #798: TH0T = (flt , 0x85) 35.549560546875
-#799: TH0x = (flt , 0x85) 35.549560546875
-#800: TIOP = (flt , 0x85) 37.193695068359375
-#801: TMVR = (flt , 0x85) 35.86936950683594
-#802: TPMP = (flt , 0x85) 36.22523498535156
-#803: TPSP = (flt , 0x85) 36.72523498535156
-#810: TSCD = (flt , 0x85) 35.148651123046875
-#811: TVA0 = (flt , 0x85) 27.764366149902344
-#812: TVD0 = (flt , 0x85) 46.171024322509766
-#813: TVS0 = (flt , 0x85) 31.897750854492188
-#814: TVS1 = (flt , 0x85) 33.67891311645508
-#815: TVSx = (flt , 0x85) 33.67891311645508
-#816: TW0P = (flt , 0x85) 35.65766906738281
-#822: Tc0a = (flt , 0x85) 34.502506256103516
-#823: Tc0b = (flt , 0x85) 34.502506256103516
-#824: Tc0x = (flt , 0x85) 35.90625
-#825: Tc0z = (flt , 0x85) 35.90625
-#850: Tc7a = (flt , 0x85) 32.649532318115234
-#851: Tc7b = (flt , 0x85) 32.649532318115234
-#852: Tc7x = (flt , 0x85) 35.390625
-#853: Tc7z = (flt , 0x85) 35.390625
-#854: Tc8a = (flt , 0x85) 35.64579772949219
-#855: Tc8b = (flt , 0x85) 35.64579772949219
-#856: Tc8x = (flt , 0x85) 38.140625
-#857: Tc8z = (flt , 0x85) 38.140625
-#858: Tc9a = (flt , 0x85) 36.01177215576172
-#859: Tc9b = (flt , 0x85) 36.01177215576172
-#860: Tc9x = (flt , 0x85) 37.828125
-#861: Tc9z = (flt , 0x85) 37.828125
-#862: Tcaa = (flt , 0x85) 35.11748504638672
-#863: Tcab = (flt , 0x85) 35.11748504638672
-#864: Tcax = (flt , 0x85) 37.328125
-#865: Tcaz = (flt , 0x85) 37.328125
-#866: Te0a = (flt , 0x85) 30.76156234741211
-#867: Te0b = (flt , 0x85) 30.76156234741211
-#868: Te0x = (flt , 0x85) 32.6875
-#869: Te0z = (flt , 0x85) 32.6875
-#870: Te3a = (flt , 0x85) 32.577030181884766
-#871: Te3b = (flt , 0x85) 41.27703094482422
-#872: Te3x = (flt , 0x85) 35.390625
-#873: Te3z = (flt , 0x85) 55.390625
-
-#876: Th0a = (flt , 0x85) 34.35187530517578
-#877: Th0b = (flt , 0x85) 34.35187530517578
-#878: Th0x = (flt , 0x85) 34.5625
-#879: Th0z = (flt , 0x85) 34.5625
-#880: Th1a = (flt , 0x85) 34.363319396972656
-#881: Th1b = (flt , 0x85) 43.363319396972656
-#882: Th1x = (flt , 0x85) 34.625
-#883: Th1z = (flt , 0x85) 43.625
-#884: Th2a = (flt , 0x85) 34.23957061767578
-#885: Th2b = (flt , 0x85) 43.23957061767578
-#886: Th2x = (flt , 0x85) 34.546875
-#887: Th2z = (flt , 0x85) 43.546875
-#888: Tp2a = (flt , 0x85) 32.774227142333984
-#889: Tp2b = (flt , 0x85) 41.874229431152344
-#890: Tp2x = (flt , 0x85) 35.03125
-#891: Tp2z = (flt , 0x85) 50.03125
-#892: Tp3a = (flt , 0x85) 35.187313079833984
-#893: Tp3b = (flt , 0x85) 42.58731460571289
-#894: Tp3x = (flt , 0x85) 37.8125
-#895: Tp3z = (flt , 0x85) 49.8125
-#896: Tp4a = (flt , 0x85) 35.114498138427734
-#897: Tp4b = (flt , 0x85) 45.214500427246094
-#898: Tp4x = (flt , 0x85) 38.140625
-#899: Tp4z = (flt , 0x85) 55.140625
-#900: Tp5a = (flt , 0x85) 36.01206970214844
-#901: Tp5b = (flt , 0x85) 46.21207046508789
-#902: Tp5x = (flt , 0x85) 37.828125
-#903: Tp5z = (flt , 0x85) 53.828125
-#904: Tp7a = (flt , 0x85) 32.269954681396484
-#905: Tp7b = (flt , 0x85) 41.369956970214844
-#906: Tp7x = (flt , 0x85) 34.578125
-#907: Tp7z = (flt , 0x85) 49.578125
-#908: Tp8a = (flt , 0x85) 34.88423538208008
-#909: Tp8b = (flt , 0x85) 42.284236907958984
-#910: Tp8x = (flt , 0x85) 37.046875
-#911: Tp8z = (flt , 0x85) 49.046875
-#912: Tp9a = (flt , 0x85) 34.37004852294922
-#913: Tp9b = (flt , 0x85) 44.47004699707031
-#914: Tp9x = (flt , 0x85) 37.328125
-#915: Tp9z = (flt , 0x85) 54.328125
-#916: Ts0a = (flt , 0x85) 33.5078125
-#917: Ts0b = (flt , 0x85) 33.5078125
-#918: Ts0x = (flt , 0x85) 35.3125
-#919: Ts0z = (flt , 0x85) 35.3125
-#920: Ts1a = (flt , 0x85) 34.453399658203125
-#921: Ts1b = (flt , 0x85) 39.453399658203125
-#922: Ts1x = (flt , 0x85) 35.90625
-#923: Ts1z = (flt , 0x85) 40.90625
-#924: Ts2a = (flt , 0x85) 32.378868103027344
-#925: Ts2b = (flt , 0x85) 37.378868103027344
-#926: Ts2x = (flt , 0x85) 33.90625
-#927: Ts2z = (flt , 0x85) 38.90625
-	 */
 };
 
 static int apple_soc_smc_read_labels(struct device *dev,
@@ -278,6 +214,9 @@ static int apple_soc_smc_read_labels(struct device *dev,
 	switch (type) {
 	case hwmon_temp:
 		*str = apple_soc_smc_temp_table[channel].label;
+		break;
+	case hwmon_curr:
+		*str = apple_soc_smc_curr_table[channel].label;
 		break;
 	default:
 		return -EOPNOTSUPP;
@@ -293,19 +232,35 @@ static int apple_soc_smc_read(struct device *dev, enum hwmon_sensor_types type,
 	struct apple_smc *smc = hwmon->smc;
 
 	int ret = 0;
-	u32 vu32;
+	u32 vu32 = 0;
 
-	if (type == hwmon_temp){
-		if (channel < 100){
-			ret = apple_smc_read_u32(smc,apple_soc_smc_temp_table[channel].smc_key, &vu32);
-			vu32=convert_float_celsius_to_int_millicelsius(vu32);
-			*val = vu32;
-			return ret;
-		}
-		else
-			return -EOPNOTSUPP;
+	switch (type) {
+		case hwmon_temp:
+			if (channel < 100){
+				ret = apple_smc_read_u32(smc,apple_soc_smc_temp_table[channel].smc_key, &vu32);
+				if (ret == 0){
+					*val = convert_float_to_int(vu32);
+				}
+			}
+			else
+				ret = -EOPNOTSUPP;
+		break;
+
+		case hwmon_curr:
+			if (channel < (sizeof(apple_soc_smc_curr_table)/sizeof(struct channel_info))){
+				ret = apple_smc_read_u32(smc,apple_soc_smc_curr_table[channel].smc_key, &vu32);
+				if (ret == 0){
+					*val = convert_float_to_int(vu32);
+				}
+			}
+			else
+				ret = -EOPNOTSUPP;
+		break;
+
+		default:
+			ret = -EOPNOTSUPP;
 	}
-	return -EOPNOTSUPP;
+	return ret;
 }
 
 
@@ -333,17 +288,11 @@ static const struct hwmon_channel_info *apple_soc_smc_info[] = {
 		*/
         HWMON_CHANNEL_INFO(temp,
                         HWMON_T_INPUT|HWMON_T_LABEL,
-		/* #786: TB0T = (flt , 0x85) 32.399993896484375 */
                         HWMON_T_INPUT|HWMON_T_LABEL,
-		/* #787: TB1T = (flt , 0x85) 32.399993896484375 */
                         HWMON_T_INPUT|HWMON_T_LABEL,
-		/* #788: TB2T = (flt , 0x85) 31.29998779296875 */
                         HWMON_T_INPUT|HWMON_T_LABEL,
-		/* #789: TCHP = (flt , 0x85) 36.653167724609375 */
                         HWMON_T_INPUT|HWMON_T_LABEL,
-		/* #790: TCMb = (flt , 0x85) 46.171024322509766 */
                         HWMON_T_INPUT|HWMON_T_LABEL,
-		/* #791: TCMz = (flt , 0x85) 55.390625 */
                         HWMON_T_INPUT|HWMON_T_LABEL,
                         HWMON_T_INPUT|HWMON_T_LABEL,
                         HWMON_T_INPUT|HWMON_T_LABEL,
@@ -438,6 +387,42 @@ static const struct hwmon_channel_info *apple_soc_smc_info[] = {
                         HWMON_T_INPUT|HWMON_T_LABEL,
                         HWMON_T_INPUT|HWMON_T_LABEL,
                         HWMON_T_INPUT|HWMON_T_LABEL),
+		HWMON_CHANNEL_INFO(curr,
+                        HWMON_C_INPUT|HWMON_C_LABEL,
+                        HWMON_C_INPUT|HWMON_C_LABEL,
+                        HWMON_C_INPUT|HWMON_C_LABEL,
+                        HWMON_C_INPUT|HWMON_C_LABEL,
+                        HWMON_C_INPUT|HWMON_C_LABEL,
+                        HWMON_C_INPUT|HWMON_C_LABEL,
+                        HWMON_C_INPUT|HWMON_C_LABEL,
+                        HWMON_C_INPUT|HWMON_C_LABEL,
+                        HWMON_C_INPUT|HWMON_C_LABEL,
+                        HWMON_C_INPUT|HWMON_C_LABEL,
+                        HWMON_C_INPUT|HWMON_C_LABEL,
+                        HWMON_C_INPUT|HWMON_C_LABEL,
+                        HWMON_C_INPUT|HWMON_C_LABEL,
+                        HWMON_C_INPUT|HWMON_C_LABEL,
+                        HWMON_C_INPUT|HWMON_C_LABEL,
+                        HWMON_C_INPUT|HWMON_C_LABEL,
+                        HWMON_C_INPUT|HWMON_C_LABEL,
+                        HWMON_C_INPUT|HWMON_C_LABEL,
+                        HWMON_C_INPUT|HWMON_C_LABEL,
+                        HWMON_C_INPUT|HWMON_C_LABEL,
+                        HWMON_C_INPUT|HWMON_C_LABEL,
+                        HWMON_C_INPUT|HWMON_C_LABEL,
+                        HWMON_C_INPUT|HWMON_C_LABEL,
+                        HWMON_C_INPUT|HWMON_C_LABEL,
+                        HWMON_C_INPUT|HWMON_C_LABEL,
+                        HWMON_C_INPUT|HWMON_C_LABEL,
+                        HWMON_C_INPUT|HWMON_C_LABEL,
+                        HWMON_C_INPUT|HWMON_C_LABEL,
+                        HWMON_C_INPUT|HWMON_C_LABEL,
+                        HWMON_C_INPUT|HWMON_C_LABEL,
+                        HWMON_C_INPUT|HWMON_C_LABEL,
+                        HWMON_C_INPUT|HWMON_C_LABEL,
+                        HWMON_C_INPUT|HWMON_C_LABEL,
+                        HWMON_C_INPUT|HWMON_C_LABEL),
+
 		NULL
 };
 
