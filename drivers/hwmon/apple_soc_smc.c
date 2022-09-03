@@ -27,24 +27,16 @@ static u32 convert_float_celsius_to_int_millicelsius(u32 flt){
     int i,b;
 	u32 result;
 
-    printk("dec:%d hex:%x\n",flt,flt);
-
     sign=flt>>31;
-
     exp=flt>>23;
-
     mant=flt<<9>>9;
 
-    printk("JFB: sign:%d exp:%d mant:%d 0x%x\n",sign,exp,mant,mant);
-
-    val=0;
+	val=0;
     for(i=22;i>=0;i-=1){
         b=(mant&(1<<i))>>i;
         val+=b*(1000000000>>(23-i));
-        printk("JFB: b:%d 0x%x val:%ld\n",b,b,val);
     }
     result = ((val+1000000000)<<(exp-127))/1000000;
-    printk("JFB: result: 0x%x\n",result);
 	return result;
 }
 
@@ -303,14 +295,10 @@ static int apple_soc_smc_read(struct device *dev, enum hwmon_sensor_types type,
 	int ret = 0;
 	u32 vu32;
 
-	printk("JFB: apple_soc_smc_read sensor_type:%d attr:%d %x channel:%d val: %p smc: %p\n",type,attr,attr,channel,val,smc);
-
 	if (type == hwmon_temp){
-		printk("hwmon_temp\n");
 		if (channel < 100){
 			ret = apple_smc_read_u32(smc,apple_soc_smc_temp_table[channel].smc_key, &vu32);
 			vu32=convert_float_celsius_to_int_millicelsius(vu32);
-			printk("vu32:%x ret:%d\n",vu32,ret);
 			*val = vu32;
 			return ret;
 		}
