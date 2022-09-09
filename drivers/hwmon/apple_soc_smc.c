@@ -66,6 +66,80 @@ struct channel_info{
 };
 
 /* MBA M1 Platform name: #680: RPlt = (ch8*, 0x84) b'j313_8fs' */
+static const struct channel_info apple_soc_smc_power_table[] = {
+	{SMC_KEY(PBLR),"Power (PBLR)"},
+	{SMC_KEY(PDTR),"Power (PDTR)"},
+	{SMC_KEY(PGDP),"Power (PGDP)"},
+	{SMC_KEY(PHPB),"Power (PHPB)"},
+	{SMC_KEY(PHPC),"Power (PHPC)"},
+	{SMC_KEY(PHPM),"Power (PHPM)"},
+	{SMC_KEY(PHPS),"Power (PHPS)"},
+	{SMC_KEY(PKBC),"Power (PKBC)"},
+	{SMC_KEY(PMVC),"Power (PMVC)"},
+	{SMC_KEY(PO3R),"Power (PO3R)"},
+	{SMC_KEY(PO5R),"Power (PO5R)"},
+	{SMC_KEY(PP0b),"Power (PP0b)"},
+	{SMC_KEY(PP0l),"Power (PP0l)"},
+	{SMC_KEY(PP1b),"Power (PP1b)"},
+	{SMC_KEY(PP2b),"Power (PP2b)"},
+	{SMC_KEY(PP3b),"Power (PP3b)"},
+	{SMC_KEY(PP3l),"Power (PP3l)"},
+	{SMC_KEY(PP7b),"Power (PP7b)"},
+	{SMC_KEY(PP7l),"Power (PP7l)"},
+	{SMC_KEY(PP8b),"Power (PP8b)"},
+	{SMC_KEY(PP9b),"Power (PP9b)"},
+	{SMC_KEY(PP9l),"Power (PP9l)"},
+	{SMC_KEY(PPBR),"Power (PPBR)"},
+	{SMC_KEY(PPbb),"Power (PPbb)"},
+	{SMC_KEY(PPeb),"Power (PPeb)"},
+	{SMC_KEY(PR4b),"Power (PR4b)"},
+	{SMC_KEY(PR4l),"Power (PR4l)"},
+	{SMC_KEY(PR5b),"Power (PR5b)"},
+	{SMC_KEY(PR6b),"Power (PR6b)"},
+	{SMC_KEY(PR8l),"Power (PR8l)"},
+	{SMC_KEY(PRab),"Power (PRab)"},
+	{SMC_KEY(PRbl),"Power (PRbl)"},
+	{SMC_KEY(PRcb),"Power (PRcb)"},
+	{SMC_KEY(PRcl),"Power (PRcl)"},
+	{SMC_KEY(PRdb),"Power (PRdb)"},
+	{SMC_KEY(PRkl),"Power (PRkl)"},
+	{SMC_KEY(PSTR),"Power (PSTR)"},
+	{SMC_KEY(PW3C),"Power (PW3C)"},
+	{SMC_KEY(PZl0),"Power (PZl0)"},
+	{SMC_KEY(PZlF),"Power (PZlF)"},
+	{SMC_KEY(Pb0f),"Power (Pb0f)"},
+}
+
+static const struct channel_info apple_soc_smc_volt_table[] = {
+	{SMC_KEY(VD0R),"Voltage (VD0R)"},
+	{SMC_KEY(VP0R),"Voltage (VP0R)"},
+	{SMC_KEY(VP0b),"Voltage (VP0b)"},
+	{SMC_KEY(VP0l),"Voltage (VP0l)"},
+	{SMC_KEY(VP1b),"Voltage (VP1b)"},
+	{SMC_KEY(VP2b),"Voltage (VP2b)"},
+	{SMC_KEY(VP3b),"Voltage (VP3b)"},
+	{SMC_KEY(VP3l),"Voltage (VP3l)"},
+	{SMC_KEY(VP7b),"Voltage (VP7b)"},
+	{SMC_KEY(VP7l),"Voltage (VP7l)"},
+	{SMC_KEY(VP8b),"Voltage (VP8b)"},
+	{SMC_KEY(VP9b),"Voltage (VP9b)"},
+	{SMC_KEY(VP9l),"Voltage (VP9l)"},
+	{SMC_KEY(VPbb),"Voltage (VPbb)"},
+	{SMC_KEY(VPeb),"Voltage (VPeb)"},
+	{SMC_KEY(VR4b),"Voltage (VR4b)"},
+	{SMC_KEY(VR4l),"Voltage (VR4l)"},
+	{SMC_KEY(VR5b),"Voltage (VR5b)"},
+	{SMC_KEY(VR6b),"Voltage (VR6b)"},
+	{SMC_KEY(VR8l),"Voltage (VR8l)"},
+	{SMC_KEY(VRab),"Voltage (VRab)"},
+	{SMC_KEY(VRbl),"Voltage (VRbl)"},
+	{SMC_KEY(VRcb),"Voltage (VRcb)"},
+	{SMC_KEY(VRcl),"Voltage (VRcl)"},
+	{SMC_KEY(VRdb),"Voltage (VRdb)"},
+	{SMC_KEY(VRkl),"Voltage (VRkl)"},
+	{SMC_KEY(Vb0f),"Voltage (Vb0f)"},
+	{SMC_KEY(Vb1f),"Voltage (Vb1f)"}
+}
 static const struct channel_info apple_soc_smc_curr_table[] = {
 	{SMC_KEY(IBLR),"Current (IBLR)"},
 	{SMC_KEY(ID0R),"Current (ID0R)"},
@@ -101,7 +175,7 @@ static const struct channel_info apple_soc_smc_curr_table[] = {
 	{SMC_KEY(IW3C),"Current (IW3C)"},
 	{SMC_KEY(Ib0f),"Current (Ib0f)"},
 	{SMC_KEY(Ib4f),"Current (Ib4f)"},
-	{SMC_KEY(Ib8f),"Current (Ib8f)"},
+	{SMC_KEY(Ib8f),"Current (Ib8f)"}
 };
 
 static const struct channel_info apple_soc_smc_temp_table[] = {
@@ -204,7 +278,7 @@ static const struct channel_info apple_soc_smc_temp_table[] = {
 	{SMC_KEY(Ts2x),"Temp (Ts2x)"},
 	{SMC_KEY(Ts2z),"Temp (Ts2z)"},
 	{SMC_KEY(TVA0),"Temp (TVA0)"},
-	{SMC_KEY(TVD0),"Temp (TVD0)"},
+	{SMC_KEY(TVD0),"Temp (TVD0)"}
 };
 
 static int apple_soc_smc_read_labels(struct device *dev,
@@ -216,6 +290,9 @@ static int apple_soc_smc_read_labels(struct device *dev,
 		*str = apple_soc_smc_temp_table[channel].label;
 		break;
 	case hwmon_curr:
+		*str = apple_soc_smc_curr_table[channel].label;
+		break;
+	case hwmon_in:
 		*str = apple_soc_smc_curr_table[channel].label;
 		break;
 	default:
@@ -249,6 +326,28 @@ static int apple_soc_smc_read(struct device *dev, enum hwmon_sensor_types type,
 		case hwmon_curr:
 			if (channel < (sizeof(apple_soc_smc_curr_table)/sizeof(struct channel_info))){
 				ret = apple_smc_read_u32(smc,apple_soc_smc_curr_table[channel].smc_key, &vu32);
+				if (ret == 0){
+					*val = convert_float_to_int(vu32);
+				}
+			}
+			else
+				ret = -EOPNOTSUPP;
+		break;
+
+		case hwmon_in:
+			if (channel < (sizeof(apple_soc_smc_volt_table)/sizeof(struct channel_info))){
+				ret = apple_smc_read_u32(smc,apple_soc_smc_volt_table[channel].smc_key, &vu32);
+				if (ret == 0){
+					*val = convert_float_to_int(vu32);
+				}
+			}
+			else
+				ret = -EOPNOTSUPP;
+		break;
+
+		case hwmon_power:
+			if (channel < (sizeof(apple_soc_smc_power_table)/sizeof(struct channel_info))){
+				ret = apple_smc_read_u32(smc,apple_soc_smc_power_table[channel].smc_key, &vu32);
 				if (ret == 0){
 					*val = convert_float_to_int(vu32);
 				}
@@ -422,7 +521,77 @@ static const struct hwmon_channel_info *apple_soc_smc_info[] = {
                         HWMON_C_INPUT|HWMON_C_LABEL,
                         HWMON_C_INPUT|HWMON_C_LABEL,
                         HWMON_C_INPUT|HWMON_C_LABEL),
-
+		HWMON_CHANNEL_INFO(in,
+                        HWMON_I_INPUT|HWMON_I_LABEL,
+                        HWMON_I_INPUT|HWMON_I_LABEL,
+                        HWMON_I_INPUT|HWMON_I_LABEL,
+                        HWMON_I_INPUT|HWMON_I_LABEL,
+                        HWMON_I_INPUT|HWMON_I_LABEL,
+                        HWMON_I_INPUT|HWMON_I_LABEL,
+                        HWMON_I_INPUT|HWMON_I_LABEL,
+                        HWMON_I_INPUT|HWMON_I_LABEL,
+                        HWMON_I_INPUT|HWMON_I_LABEL,
+                        HWMON_I_INPUT|HWMON_I_LABEL,
+                        HWMON_I_INPUT|HWMON_I_LABEL,
+                        HWMON_I_INPUT|HWMON_I_LABEL,
+                        HWMON_I_INPUT|HWMON_I_LABEL,
+                        HWMON_I_INPUT|HWMON_I_LABEL,
+                        HWMON_I_INPUT|HWMON_I_LABEL,
+                        HWMON_I_INPUT|HWMON_I_LABEL,
+                        HWMON_I_INPUT|HWMON_I_LABEL,
+                        HWMON_I_INPUT|HWMON_I_LABEL,
+                        HWMON_I_INPUT|HWMON_I_LABEL,
+                        HWMON_I_INPUT|HWMON_I_LABEL,
+                        HWMON_I_INPUT|HWMON_I_LABEL,
+                        HWMON_I_INPUT|HWMON_I_LABEL,
+                        HWMON_I_INPUT|HWMON_I_LABEL,
+                        HWMON_I_INPUT|HWMON_I_LABEL,
+                        HWMON_I_INPUT|HWMON_I_LABEL,
+                        HWMON_I_INPUT|HWMON_I_LABEL,
+                        HWMON_I_INPUT|HWMON_I_LABEL,
+                        HWMON_I_INPUT|HWMON_I_LABEL),
+		HWMON_CHANNEL_INFO(power,
+                        HWMON_P_INPUT|HWMON_P_LABEL,
+                        HWMON_P_INPUT|HWMON_P_LABEL,
+                        HWMON_P_INPUT|HWMON_P_LABEL,
+                        HWMON_P_INPUT|HWMON_P_LABEL,
+                        HWMON_P_INPUT|HWMON_P_LABEL,
+                        HWMON_P_INPUT|HWMON_P_LABEL,
+                        HWMON_P_INPUT|HWMON_P_LABEL,
+                        HWMON_P_INPUT|HWMON_P_LABEL,
+                        HWMON_P_INPUT|HWMON_P_LABEL,
+                        HWMON_P_INPUT|HWMON_P_LABEL,
+                        HWMON_P_INPUT|HWMON_P_LABEL,
+                        HWMON_P_INPUT|HWMON_P_LABEL,
+                        HWMON_P_INPUT|HWMON_P_LABEL,
+                        HWMON_P_INPUT|HWMON_P_LABEL,
+                        HWMON_P_INPUT|HWMON_P_LABEL,
+                        HWMON_P_INPUT|HWMON_P_LABEL,
+                        HWMON_P_INPUT|HWMON_P_LABEL,
+                        HWMON_P_INPUT|HWMON_P_LABEL,
+                        HWMON_P_INPUT|HWMON_P_LABEL,
+                        HWMON_P_INPUT|HWMON_P_LABEL,
+                        HWMON_P_INPUT|HWMON_P_LABEL,
+                        HWMON_P_INPUT|HWMON_P_LABEL,
+                        HWMON_P_INPUT|HWMON_P_LABEL,
+                        HWMON_P_INPUT|HWMON_P_LABEL,
+                        HWMON_P_INPUT|HWMON_P_LABEL,
+                        HWMON_P_INPUT|HWMON_P_LABEL,
+                        HWMON_P_INPUT|HWMON_P_LABEL,
+                        HWMON_P_INPUT|HWMON_P_LABEL,
+                        HWMON_P_INPUT|HWMON_P_LABEL,
+                        HWMON_P_INPUT|HWMON_P_LABEL,
+                        HWMON_P_INPUT|HWMON_P_LABEL,
+                        HWMON_P_INPUT|HWMON_P_LABEL,
+                        HWMON_P_INPUT|HWMON_P_LABEL,
+                        HWMON_P_INPUT|HWMON_P_LABEL,
+                        HWMON_P_INPUT|HWMON_P_LABEL,
+                        HWMON_P_INPUT|HWMON_P_LABEL,
+                        HWMON_P_INPUT|HWMON_P_LABEL,
+                        HWMON_P_INPUT|HWMON_P_LABEL,
+                        HWMON_P_INPUT|HWMON_P_LABEL,
+                        HWMON_P_INPUT|HWMON_P_LABEL,
+                        HWMON_P_INPUT|HWMON_P_LABEL),
 		NULL
 };
 
