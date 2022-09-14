@@ -108,7 +108,7 @@ static const struct channel_info apple_soc_smc_power_table[] = {
 	{SMC_KEY(PZl0),"Power (PZl0)"},
 	{SMC_KEY(PZlF),"Power (PZlF)"},
 	{SMC_KEY(Pb0f),"Power (Pb0f)"},
-}
+};
 
 static const struct channel_info apple_soc_smc_volt_table[] = {
 	{SMC_KEY(VD0R),"Voltage (VD0R)"},
@@ -139,7 +139,8 @@ static const struct channel_info apple_soc_smc_volt_table[] = {
 	{SMC_KEY(VRkl),"Voltage (VRkl)"},
 	{SMC_KEY(Vb0f),"Voltage (Vb0f)"},
 	{SMC_KEY(Vb1f),"Voltage (Vb1f)"}
-}
+};
+
 static const struct channel_info apple_soc_smc_curr_table[] = {
 	{SMC_KEY(IBLR),"Current (IBLR)"},
 	{SMC_KEY(ID0R),"Current (ID0R)"},
@@ -293,7 +294,10 @@ static int apple_soc_smc_read_labels(struct device *dev,
 		*str = apple_soc_smc_curr_table[channel].label;
 		break;
 	case hwmon_in:
-		*str = apple_soc_smc_curr_table[channel].label;
+		*str = apple_soc_smc_volt_table[channel].label;
+		break;
+	case hwmon_power:
+		*str = apple_soc_smc_power_table[channel].label;
 		break;
 	default:
 		return -EOPNOTSUPP;
