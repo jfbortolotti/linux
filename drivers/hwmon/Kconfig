@@ -358,6 +358,18 @@ config SENSORS_APPLESMC
 	  Say Y here if you have an applicable laptop and want to experience
 	  the awesome power of applesmc.
 
+config SENSORS_APPLE_SOC_SMC
+	tristate "Apple SoC SMC Sensors (Voltages, Power, Current and Temp)"
+	depends on ARCH_APPLE
+	help
+	  This driver provides support for the Apple System Management
+	  Controller.
+
+	  Only Apple SoC based models are supported.
+
+	  Say Y here if you have an applicable laptop and want to experience
+	  the awesome power of applesmc on Apple SOC machines.
+
 config SENSORS_ARM_SCMI
 	tristate "ARM SCMI Sensors"
 	depends on ARM_SCMI_PROTOCOL
