@@ -166,6 +166,44 @@
 			default-state = "keep";
 		};
 	};
+
+		hwmon-sensors {
+			pwr_keys {
+				pwr_key01 {
+					key = "PHPC";
+					label = "Total CPU Core Power";
+				};
+				pwr_key02 {
+					key = "PSTR";
+					label = "Power of xxx";
+				};
+				pwr_key03 {
+					key = "PSTR";
+				};
+				pwr_key04 {
+				};
+			};
+			temp_keys {
+				temp_key01 {
+					key = "TSCD";
+					label = "Battery Hotspot Temp";
+				};
+				temp_key02 {
+					key = "TH0x";
+					label = "NAND Hotspot Temp";
+				};
+				temp_key03 {
+					key = "Th1a";
+					label = "GPU Temp";
+				};
+				temp_key04 {
+					key = "TW0P";
+					label = "WiFi/BT Module Temp";
+				};
+			};
+			current_keys {
+			};
+	};
 };
 
 &framebuffer0 {
