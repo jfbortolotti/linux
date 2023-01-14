@@ -148,7 +148,7 @@ static int apple_smc_cmd(struct apple_smc_rtkit *smc, u64 cmd, u64 arg,
 
 	if (ret_data)
 		*ret_data = FIELD_GET(SMC_DATA, smc->cmd_ret);
-
+	
 	return FIELD_GET(SMC_SIZE, smc->cmd_ret);
 }
 
@@ -221,8 +221,9 @@ static int apple_smc_rtkit_get_key_info(void *cookie, smc_key key, struct apple_
 	u8 key_info[6];
 	int ret;
 
-	ret = apple_smc_cmd(smc, SMC_MSG_GET_KEY_INFO, key, 0, 0, NULL);
+	ret = apple_smc_cmd(smc, SMC_MSG_GET_KEY_INFO, key, 6, 0, NULL);
 	if (ret >= 0 && info) {
+		memcpy_fromio(key_info,smc->shmem.iomem,6);
 		info->size = key_info[0];
 		info->type_code = get_unaligned_be32(&key_info[1]);
 		info->flags = key_info[5];
