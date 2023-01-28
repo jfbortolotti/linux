@@ -166,6 +166,11 @@
 			default-state = "keep";
 		};
 	};
+
+	macsmc-hwmon {
+    	compatible = "apple,macsmc-hwmon";
+		pwr_keys = "PBLR","PDTR","PGDP","PHPB","PHPC","PHPM","PHPS","PKBC","PMVC","PO3R","PO5R","PP0b","PP0l","PP1b","PP2b","PP3b","PP3l","PP8b","PP7b","PP7l","PP9b","PP9l","PPBR","PPbb","PPeb","PR4b","PR4l","PR5b","PR6b","PR8l","PRab","PRbl","PRcb","PRcl","PRdb","PRkl","PSTR","PW3C","PZl0","PZlF","Pb0f";
+	};
 };
 
 &framebuffer0 {

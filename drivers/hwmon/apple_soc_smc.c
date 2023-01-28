@@ -676,6 +676,40 @@ static int apple_soc_smc_hwmon_probe(struct platform_device *pdev)
 	int  i;
 	struct hwmon_channel_info * chan_info_p;
 	u32 *config ;
+	struct device_node *np = pdev->dev.of_node;
+	struct property *prop_p;
+	const char *const *table;
+	const char *key;
+	int size;
+
+	if (np != NULL) {
+		printk("np name: %s full name: %s ",np->name,np->full_name);
+
+		prop_p = np->properties;
+		while (prop_p != NULL) {
+			printk("prop name: %s len:%d value: %p",prop_p->name,prop_p->length,prop_p->value);
+			prop_p = prop_p->next;
+		}
+
+		table = of_get_property(np, "pwr_keys", &size);
+		if (!table) {
+			dev_err(&pdev->dev, "Failed to get table property\n");
+			return -ENODEV;
+		}
+		/*
+		printk("sizeof(table):%d size:%d\n",sizeof(*table),size);
+		key=*table;
+		while (key < table+size){
+			printk("Key:%s\n",key);
+			key = key + strlen(key);
+		}
+		size /= sizeof(*table);
+		for (i = 0; i < size; i++)
+			printk("table[%d] = %s\n", i, table[i]);
+		*/
+	} else {
+		printk("np is NULL !!!!");
+	}
 
 	smc_hwmon = devm_kzalloc(&pdev->dev, sizeof(*smc_hwmon), GFP_KERNEL);
 	if (!smc_hwmon)
@@ -761,11 +795,20 @@ static int apple_soc_smc_hwmon_probe(struct platform_device *pdev)
 	return 0;
 }
 
+
+static const struct of_device_id macsmc_hwmon_of_match[] = {
+    { .compatible = "apple,macsmc-hwmon" },
+    {}
+};
+MODULE_DEVICE_TABLE(of, macsmc_hwmon_of_match);
+
 static struct platform_driver apple_soc_smc_hwmon_driver = {
 	.probe = apple_soc_smc_hwmon_probe,
 	.driver = {
 		.name = "macsmc-hwmon",
 		.owner = THIS_MODULE,
+        .of_match_table = macsmc_hwmon_of_match,
+
 	},
 };
 
