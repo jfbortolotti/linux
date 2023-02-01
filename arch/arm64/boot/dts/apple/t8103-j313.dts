@@ -170,6 +170,9 @@
 	macsmc-hwmon {
     	compatible = "apple,macsmc-hwmon";
 		pwr_keys = "PBLR","PDTR","PGDP","PHPB","PHPC","PHPM","PHPS","PKBC","PMVC","PO3R","PO5R","PP0b","PP0l","PP1b","PP2b","PP3b","PP3l","PP8b","PP7b","PP7l","PP9b","PP9l","PPBR","PPbb","PPeb","PR4b","PR4l","PR5b","PR6b","PR8l","PRab","PRbl","PRcb","PRcl","PRdb","PRkl","PSTR","PW3C","PZl0","PZlF","Pb0f";
+		temp_keys = "TSCD","TB0T","TB1T","TB1T","TCHP","TCMb","TCMz","TH0T","TH0x","TSCD","TVS0","TVS1","TVSx","Tc0b","Th0x","Th1a","Th2a","Ts1a","Ts2a","TIOP","TMVR","TPMP","TPSP","TW0P","Tc0a","Tc0x","Tc0z","Tc7a","Tc7b","Tc7x","Tc7z","Tc8a","Tc8b","Tc8x","Tc8z","Tc9a","Tc9b","Tc9x","Tc9z","Tcaa","Tcab","Tcax","Tcaz","Te0a","Te0b","Te0x","Te0z","Te3a","Te3b","Te3x","Te3z","Th0a","Th0b","Th0z","Th1b","Th1x","Th1z","Th2b","Th2x","Th2z","Tp2a","Tp2b","Tp2x","Tp2z","Tp3a","Tp3b","Tp3x","Tp3z","Tp4a","Tp4b","Tp4x","Tp4z","Tp5a","Tp5b","Tp5x","Tp5z","Tp7a","Tp7b","Tp7x","Tp7z","Tp8a","Tp8b","Tp8x","Tp8z","Tp9a","Tp9b","Tp9x","Tp9z","Ts0a","Ts0b","Ts0x","Ts0z","Ts1b","Ts1x","Ts1z","Ts2b","Ts2x","Ts2z","TVA0","TVD0";
+		current_keys = "IBLR","ID0R","IKBC","IMVC","IO3R","IO5R","IP0b","IP0l","IP1b","IP2b","IP3b","IP3l","IP7b","IP7l","IP8b","IP9b","IP9l","IPBR","IPbb","IPeb","IR4b","IR4l","IR5b","IR6b","IR8l","IRab","IRbl","IRcb","IRcl","IRdb","IRkl","IW3C","Ib0f","Ib4f","Ib8f";
+		voltage_keys = "VD0R","VP0R","VP0b","VP0l","VP1b","VP2b","VP3b","VP3l","VP7b","VP7l","VP8b","VP9b","VP9l","VPbb","VPeb","VR4b","VR4l","VR5b","VR6b","VR8l","VRab","VRbl","VRcb","VRcl","VRdb","VRkl","Vb0f","Vb1f";
 	};
 };
 

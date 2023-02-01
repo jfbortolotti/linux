@@ -20,6 +20,10 @@ struct macsmc_hwmon {
 	struct apple_smc *smc;
 	struct device *hwmon_dev;
 	struct channel_info *power_table;
+	struct channel_info *temp_table;
+	struct channel_info *voltage_table;
+	struct channel_info *current_table;
+	u32 power_keys_cnt,temp_keys_cnt,voltage_keys_cnt,current_keys_cnt;
 };
 
 static u32 apple_soc_smc_float_to_int(u32 flt)
@@ -338,19 +342,32 @@ static int apple_soc_smc_read_labels(struct device *dev,
 
 	switch (type) {
 	case hwmon_temp:
-		*str = apple_soc_smc_temp_table[channel].label;
+		if (channel < hwmon->temp_keys_cnt) {
+			*str = hwmon->temp_table[channel].label;
+		} else {
+			return -EOPNOTSUPP;
+		}
 		break;
 	case hwmon_curr:
-		*str = apple_soc_smc_curr_table[channel].label;
+		if (channel < hwmon->current_keys_cnt) {
+			*str = hwmon->current_table[channel].label;
+		} else {
+			return -EOPNOTSUPP;
+		}
 		break;
 	case hwmon_in:
-		*str = apple_soc_smc_volt_table[channel].label;
+		if (channel < hwmon->voltage_keys_cnt) {
+			*str = hwmon->voltage_table[channel].label;
+		} else {
+			return -EOPNOTSUPP;
+		}
 		break;
 	case hwmon_power:
-		if (channel <= NUM_POWER_SENSORS) {
+		if (channel < hwmon->power_keys_cnt) {
 			*str = hwmon->power_table[channel].label;
-		} else
+		} else {
 			return -EOPNOTSUPP;
+		}
 		break;
 	default:
 		return -EOPNOTSUPP;
@@ -369,56 +386,59 @@ static int apple_soc_smc_read(struct device *dev, enum hwmon_sensor_types type,
 	u32 vu32 = 0;
 	u8 vu8 = 0;
 
+	printk("apple_soc_smc_read: channel: %d type: %d hwmon:%p hwmon->power_table:%p hwmon->pwr_keys_cnt:%d\n", channel,type,hwmon,hwmon->power_table,hwmon->power_keys_cnt);
+	printk("chan_table.smc_key: %c %c %c %c \n",hwmon->power_table[channel].smc_key>>24,(hwmon->power_table[channel].smc_key<<8)>>24,(hwmon->power_table[channel].smc_key<<16)>>24,(hwmon->power_table[channel].smc_key<<24)>>24);
+
 	switch (type) {
-	case hwmon_temp:
-		if (channel < (sizeof(apple_soc_smc_temp_table)/sizeof(struct channel_info))) {
-			ret = apple_smc_read_u32(smc, apple_soc_smc_temp_table[channel].smc_key, &vu32);
-			if (ret == 0)
-				*val = apple_soc_smc_float_to_int(vu32);
-		} else
-			ret = -EOPNOTSUPP;
-	break;
-
-	case hwmon_curr:
-		if (channel < (sizeof(apple_soc_smc_curr_table)/sizeof(struct channel_info))) {
-			ret = apple_smc_read_u32(smc, apple_soc_smc_curr_table[channel].smc_key, &vu32);
-			if (ret == 0)
-				*val = apple_soc_smc_float_to_int(vu32);
-		} else
-			ret = -EOPNOTSUPP;
-	break;
-
-	case hwmon_in:
-		if (channel < (sizeof(apple_soc_smc_volt_table)/sizeof(struct channel_info))) {
-			ret = apple_smc_read_u32(smc, apple_soc_smc_volt_table[channel].smc_key, &vu32);
-			if (ret == 0)
-				*val = apple_soc_smc_float_to_int(vu32);
-		} else
-			ret = -EOPNOTSUPP;
-	break;
-
-	case hwmon_power:
-		if (channel <= NUM_POWER_SENSORS) {
-			ret = apple_smc_get_key_info(smc, hwmon->power_table[channel].smc_key, &key_info);
-			if (ret == 0) {
-				if (key_info.type_code == 0x75693820){
-					ret = apple_smc_read_u8(smc, hwmon->power_table[channel].smc_key, &vu8);
-					if (ret == 0)
-						*val = vu8;
-				} else if (key_info.type_code == 0x666C7420) {
-					ret = apple_smc_read_u32(smc, hwmon->power_table[channel].smc_key, &vu32);
-					if (ret == 0)
-						*val = apple_soc_smc_float_to_int(vu32);
-				} else
-					ret = -EOPNOTSUPP;
+		case hwmon_temp:
+			if (channel <= hwmon->temp_keys_cnt) {
+				ret = apple_smc_read_u32(smc, hwmon->temp_table[channel].smc_key, &vu32);
+				if (ret == 0)
+					*val = apple_soc_smc_float_to_int(vu32);
 			} else
-				printk("Got an error on apple_smc_get_key_info \n");
-		} else
-			ret = -EOPNOTSUPP;
-	break;
+				ret = -EOPNOTSUPP;
+		break;
 
-	default:
-		ret = -EOPNOTSUPP;
+		case hwmon_curr:
+			if (channel < hwmon->temp_keys_cnt) {
+				ret = apple_smc_read_u32(smc, hwmon->current_table[channel].smc_key, &vu32);
+				if (ret == 0)
+					*val = apple_soc_smc_float_to_int(vu32);
+			} else
+				ret = -EOPNOTSUPP;
+		break;
+
+		case hwmon_in:
+			if (channel < hwmon->voltage_keys_cnt) {
+				ret = apple_smc_read_u32(smc, hwmon->voltage_table[channel].smc_key, &vu32);
+				if (ret == 0)
+					*val = apple_soc_smc_float_to_int(vu32);
+			} else
+				ret = -EOPNOTSUPP;
+		break;
+
+		case hwmon_power:
+			if (channel < hwmon->power_keys_cnt) {
+				ret = apple_smc_get_key_info(smc, hwmon->power_table[channel].smc_key, &key_info);
+				if (ret == 0) {
+					if (key_info.type_code == 0x75693820){
+						ret = apple_smc_read_u8(smc, hwmon->power_table[channel].smc_key, &vu8);
+						if (ret == 0)
+							*val = vu8;
+					} else if (key_info.type_code == 0x666C7420) {
+						ret = apple_smc_read_u32(smc, hwmon->power_table[channel].smc_key, &vu32);
+						if (ret == 0)
+							*val = apple_soc_smc_float_to_int(vu32);
+					} else
+						ret = -EOPNOTSUPP;
+				} else
+					printk("Got an error on apple_smc_get_key_info \n");
+			} else
+				ret = -EOPNOTSUPP;
+		break;
+
+		default:
+			ret = -EOPNOTSUPP;
 	}
 	return ret;
 }
@@ -667,6 +687,49 @@ static struct hwmon_chip_info apple_soc_smc_chip_info = {
 		.info = NULL,
 };
 
+static int fill_key_table(struct platform_device *pdev, char *prop,u32 *keys_cnt,struct channel_info **chan_table,char *label)
+{
+	struct device_node *np = pdev->dev.of_node;
+	const char * keys;
+	const char * key;
+	int size,i;
+
+	keys = of_get_property(np, prop, &size);
+	if (!keys) {
+		dev_err(&pdev->dev, "Failed to get %s property\n",prop);
+		return -ENODEV;
+	}
+
+	/* Building the Power channel_info list */
+	*keys_cnt = size/5; // each key is 4 characters + null string termination => 5
+	*chan_table = devm_kzalloc(&pdev->dev, sizeof(struct channel_info)*(*keys_cnt), GFP_KERNEL);
+	if (!(*chan_table))
+		return -ENOMEM;
+
+	printk("*chan_table: %p size:%ld\n",*chan_table,sizeof(struct channel_info)*(*keys_cnt));
+
+	/* Filling the channel_info list with Power keys */
+	key = keys;
+	for(i=0;i<*keys_cnt;i+=1) {
+		printk("key: %c %c %c %c  power_key_list: %c %c %c %c \n",key[0],key[1],key[2],key[3],power_key_list[i][0],power_key_list[i][1],power_key_list[i][2],power_key_list[i][3]);
+
+		(*chan_table)[i].smc_key = _SMC_KEY(key);
+		strcpy((*chan_table)[i].label,label);
+		strcat((*chan_table)[i].label," (");
+		strcat((*chan_table)[i].label,key);
+		strcat((*chan_table)[i].label,")");
+
+		printk("i:%d, smc_key: %x, label: %s",i,(*chan_table)[i].smc_key,(*chan_table)[i].label);
+
+		printk("chan_table.smc_key: %c %c %c %c \n",(*chan_table)[i].smc_key>>24,((*chan_table)[i].smc_key<<8)>>24,((*chan_table)[i].smc_key<<16)>>24,((*chan_table)[i].smc_key<<24)>>24);
+
+		key = key + strlen(key)+1;
+
+	}
+
+	return 0;
+}
+
 static int apple_soc_smc_hwmon_probe(struct platform_device *pdev)
 {
 	struct apple_smc *smc = dev_get_drvdata(pdev->dev.parent);
@@ -676,40 +739,13 @@ static int apple_soc_smc_hwmon_probe(struct platform_device *pdev)
 	int  i;
 	struct hwmon_channel_info * chan_info_p;
 	u32 *config ;
-	struct device_node *np = pdev->dev.of_node;
-	struct property *prop_p;
-	const char *const *table;
-	const char *key;
-	int size;
+	struct apple_smc_key_info key_info;
+	int ret;
 
-	if (np != NULL) {
-		printk("np name: %s full name: %s ",np->name,np->full_name);
+	printk("Jeff: smc:%p\n",smc);
+	dump_stack();
 
-		prop_p = np->properties;
-		while (prop_p != NULL) {
-			printk("prop name: %s len:%d value: %p",prop_p->name,prop_p->length,prop_p->value);
-			prop_p = prop_p->next;
-		}
-
-		table = of_get_property(np, "pwr_keys", &size);
-		if (!table) {
-			dev_err(&pdev->dev, "Failed to get table property\n");
-			return -ENODEV;
-		}
-		/*
-		printk("sizeof(table):%d size:%d\n",sizeof(*table),size);
-		key=*table;
-		while (key < table+size){
-			printk("Key:%s\n",key);
-			key = key + strlen(key);
-		}
-		size /= sizeof(*table);
-		for (i = 0; i < size; i++)
-			printk("table[%d] = %s\n", i, table[i]);
-		*/
-	} else {
-		printk("np is NULL !!!!");
-	}
+	pdev->dev.of_node = of_find_node_by_name(NULL, "macsmc-hwmon");
 
 	smc_hwmon = devm_kzalloc(&pdev->dev, sizeof(*smc_hwmon), GFP_KERNEL);
 	if (!smc_hwmon)
@@ -718,20 +754,27 @@ static int apple_soc_smc_hwmon_probe(struct platform_device *pdev)
 	smc_hwmon->dev = &pdev->dev;
 	smc_hwmon->smc = smc;
 
-	/* Building the Power channel_info list */
-	smc_hwmon->power_table = devm_kzalloc(&pdev->dev, sizeof(struct channel_info)*NUM_POWER_SENSORS, GFP_KERNEL);
-	if (!smc_hwmon->power_table)
-		return -ENOMEM;
-	
-	/* Filling the channel_info list with Power keys */
-	for(i=0;i<NUM_POWER_SENSORS;i+=1) {
-		smc_hwmon->power_table[i].smc_key = _SMC_KEY(power_key_list[i]);
-		strcpy(smc_hwmon->power_table[i].label,"Power (");
-		strcat(smc_hwmon->power_table[i].label,power_key_list[i]);
-		strcat(smc_hwmon->power_table[i].label,")");
+	ret = apple_smc_get_key_info(smc,SMC_KEY(PBLR), &key_info);
+	printk("ret: %d key_info: %x\n",ret,key_info.type_code);
 
-		printk("i:%d, smc_key: %x, label: %s",i,smc_hwmon->power_table[i].smc_key,smc_hwmon->power_table[i].label);
+	if (fill_key_table(pdev,"pwr_keys",&smc_hwmon->power_keys_cnt,&smc_hwmon->power_table,"Power") != 0) {
+		dev_err(&pdev->dev, "Failed to get pwr_keys property\n");
+		return -ENODEV;
+	}
 
+	if (fill_key_table(pdev,"temp_keys",&smc_hwmon->temp_keys_cnt,&smc_hwmon->temp_table,"Temp") != 0) {
+		dev_err(&pdev->dev, "Failed to get temp_keys property\n");
+		return -ENODEV;
+	}
+
+	if (fill_key_table(pdev,"voltage_keys",&smc_hwmon->voltage_keys_cnt,&smc_hwmon->voltage_table,"Voltage") != 0) {
+		dev_err(&pdev->dev, "Failed to get voltage_keys property\n");
+		return -ENODEV;
+	}
+
+	if (fill_key_table(pdev,"current_keys",&smc_hwmon->current_keys_cnt,&smc_hwmon->current_table,"Current") != 0) {
+		dev_err(&pdev->dev, "Failed to get current_keys property\n");
+		return -ENODEV;
 	}
 
 	/* Building the channel infos needed: 1 chip, then temp, input(voltage), current, power
@@ -740,12 +783,12 @@ static int apple_soc_smc_hwmon_probe(struct platform_device *pdev)
 		type of channel, also null terminated: 1 config for chip plus a null entry, 40 entries for power plus a null entry, and so on.
 	*/
 
-	apple_soc_smc_info = (struct hwmon_channel_info **)devm_kzalloc(&pdev->dev, 3*sizeof(struct hwmon_channel_info *) + sizeof(struct hwmon_channel_info)*(1+1)+sizeof(u32)*(2+NUM_POWER_SENSORS+1), GFP_KERNEL);
+	apple_soc_smc_info = (struct hwmon_channel_info **)devm_kzalloc(&pdev->dev, 3*sizeof(struct hwmon_channel_info *) + sizeof(struct hwmon_channel_info)*(1+1)+sizeof(u32)*(2+smc_hwmon->power_keys_cnt+1+smc_hwmon->voltage_keys_cnt+1+smc_hwmon->current_keys_cnt+1+smc_hwmon->temp_keys_cnt+1), GFP_KERNEL);
 	if (!apple_soc_smc_info)
 		return -ENOMEM;
 	
 	/* Set the chip info entry to point after the channel info pointer list and the null entry */
-	chan_info_p = (struct hwmon_channel_info *)apple_soc_smc_info + 2; // 1 for chip info, 1 for power info and 1 null entry so +2
+	chan_info_p = (struct hwmon_channel_info *)apple_soc_smc_info + 6; // 1 for chip info, 1 for power info, 1 for voltage, 1 for current, 1 for temp and 1 null entry so + 6
 
 	/* Set the config for this entry just at the end of the chan_info struct */
 	config = (u32 *)(chan_info_p + 1);
@@ -767,7 +810,7 @@ static int apple_soc_smc_hwmon_probe(struct platform_device *pdev)
 	config = (u32 *)(chan_info_p + 1);
 
 	/* Set the power config value for each power entry */
-	for(i=0;i<NUM_POWER_SENSORS;i+=1) {
+	for(i=0;i<smc_hwmon->power_keys_cnt;i+=1) {
 		config[i] = HWMON_P_INPUT|HWMON_P_LABEL;
 	}
 	config[i] = 0; // Null terminated config list
@@ -779,10 +822,67 @@ static int apple_soc_smc_hwmon_probe(struct platform_device *pdev)
 	/* Set this channel info struct in the chip info struct */
 	apple_soc_smc_info[1] = chan_info_p;
 
-	/* This is a null terminated pointer list, so last entry must be set to NULL */
-	apple_soc_smc_info[2] = NULL;
+	/* Set the next channel info pointer just after the previous entry ie config + smc_hwmon->power_keys_cnt + 1 for null +1 in this case */
+	chan_info_p = ( struct hwmon_channel_info *) (config + smc_hwmon->power_keys_cnt+1+1); 
 
-	/* This table must set as the chip info entry to be register */
+	/* Set the config for this entry just at the end of the chan_info struct */
+	config = (u32 *)(chan_info_p + 1);
+
+	/* Set the power config value for each power entry */
+	for(i=0;i<smc_hwmon->voltage_keys_cnt;i+=1) {
+		config[i] = HWMON_I_INPUT|HWMON_I_LABEL;
+	}
+	config[i] = 0; // Null terminated config list
+
+	/* Set the channel info value and pointer to the config list for the power entry */
+	chan_info_p->type = hwmon_in;
+	chan_info_p->config = config;
+
+	/* Set this channel info struct in the chip info struct */
+	apple_soc_smc_info[2] = chan_info_p;
+
+	/* Set the next channel info pointer just after the previous entry ie config + smc_hwmon->voltage_keys_cnt + 1 for null +1 in this case */
+	chan_info_p = ( struct hwmon_channel_info *) (config + smc_hwmon->voltage_keys_cnt+1+1); 
+
+	/* Set the config for this entry just at the end of the chan_info struct */
+	config = (u32 *)(chan_info_p + 1);
+
+	/* Set the power config value for each power entry */
+	for(i=0;i<smc_hwmon->current_keys_cnt;i+=1) {
+		config[i] = HWMON_C_INPUT|HWMON_C_LABEL;
+	}
+	config[i] = 0; // Null terminated config list
+
+	/* Set the channel info value and pointer to the config list for the power entry */
+	chan_info_p->type = hwmon_curr;
+	chan_info_p->config = config;
+
+	/* Set this channel info struct in the chip info struct */
+	apple_soc_smc_info[3] = chan_info_p;
+
+	/* Set the next channel info pointer just after the previous entry ie config + smc_hwmon->voltage_keys_cnt + 1 for null +1 in this case */
+	chan_info_p = ( struct hwmon_channel_info *) (config + smc_hwmon->current_keys_cnt+1+1); 
+
+	/* Set the config for this entry just at the end of the chan_info struct */
+	config = (u32 *)(chan_info_p + 1);
+
+	/* Set the power config value for each power entry */
+	for(i=0;i<smc_hwmon->temp_keys_cnt;i+=1) {
+		config[i] = HWMON_T_INPUT|HWMON_T_LABEL;
+	}
+	config[i] = 0; // Null terminated config list
+
+	/* Set the channel info value and pointer to the config list for the power entry */
+	chan_info_p->type = hwmon_temp;
+	chan_info_p->config = config;
+
+	/* Set this channel info struct in the chip info struct */
+	apple_soc_smc_info[4] = chan_info_p;
+
+	/* This is a null terminated pointer list, so last entry must be set to NULL */
+	apple_soc_smc_info[5] = NULL;
+
+	/* This table must be set as the chip info entry to be register */
 	apple_soc_smc_chip_info.info = (const struct hwmon_channel_info **)apple_soc_smc_info;
 
 	smc_hwmon->hwmon_dev = devm_hwmon_device_register_with_info(&pdev->dev,
@@ -796,19 +896,11 @@ static int apple_soc_smc_hwmon_probe(struct platform_device *pdev)
 }
 
 
-static const struct of_device_id macsmc_hwmon_of_match[] = {
-    { .compatible = "apple,macsmc-hwmon" },
-    {}
-};
-MODULE_DEVICE_TABLE(of, macsmc_hwmon_of_match);
-
 static struct platform_driver apple_soc_smc_hwmon_driver = {
 	.probe = apple_soc_smc_hwmon_probe,
 	.driver = {
-		.name = "macsmc-hwmon",
+		.name = "macsmc-hwmon2",
 		.owner = THIS_MODULE,
-        .of_match_table = macsmc_hwmon_of_match,
-
 	},
 };
 
@@ -817,3 +909,4 @@ module_platform_driver(apple_soc_smc_hwmon_driver);
 MODULE_DESCRIPTION("Apple SoC SMC Hwmon driver");
 MODULE_AUTHOR("Jean-Francois Bortolotti <jeff@borto.fr>");
 MODULE_LICENSE("GPL");
+
