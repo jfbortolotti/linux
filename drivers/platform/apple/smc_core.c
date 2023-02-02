@@ -34,7 +34,7 @@ static const struct mfd_cell apple_smc_devs[] = {
 		.name = "macsmc-hid",
 	},
 	{
-		.name = "macsmc-hwmon2",
+		.name = "macsmc-hwmon",
 	},
 	{
 		.name = "macsmc-power",
