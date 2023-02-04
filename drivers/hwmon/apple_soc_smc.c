@@ -225,8 +225,6 @@ static int fill_key_table(struct platform_device *pdev, char *prop,u32 *keys_cnt
 	if (!(*chan_table))
 		return -ENOMEM;
 
-	printk("*chan_table: %p size:%ld\n",*chan_table,sizeof(struct channel_info)*(*keys_cnt));
-
 	/* Filling the channel_info list with Power keys */
 	key = keys;
 	for(i=0;i<*keys_cnt;i+=1) {
@@ -244,20 +242,24 @@ static int fill_key_table(struct platform_device *pdev, char *prop,u32 *keys_cnt
 	return 0;
 }
 
+static void fill_config_entries(u32 *config, u32 flags, u32 cnt)
+{
+	int i;
+	
+	for (i=0;i<cnt;i+=1)
+		config[i] = flags;
+	
+	config[i] = 0;
+
+}
+
+
 static int apple_soc_smc_hwmon_probe(struct platform_device *pdev)
 {
 	struct apple_smc *smc = dev_get_drvdata(pdev->dev.parent);
 	struct device *dev = &pdev->dev;
 	struct macsmc_hwmon *smc_hwmon;
 	struct hwmon_channel_info **apple_soc_smc_info;
-	int  i;
-	struct hwmon_channel_info * chan_info_p;
-	u32 *config ;
-	struct apple_smc_key_info key_info;
-	int ret;
-
-	printk("Jeff: smc:%p\n",smc);
-	dump_stack();
 
 	if (!smc){
 		dev_err(&pdev->dev, "No smc device pointer from parent device (check device tree) \n");
@@ -271,9 +273,6 @@ static int apple_soc_smc_hwmon_probe(struct platform_device *pdev)
 
 	smc_hwmon->dev = &pdev->dev;
 	smc_hwmon->smc = smc;
-
-	ret = apple_smc_get_key_info(smc,SMC_KEY(PBLR), &key_info);
-	printk("ret: %d key_info: %x\n",ret,key_info.type_code);
 
 	if (fill_key_table(pdev,"pwr_keys",&smc_hwmon->power_keys_cnt,&smc_hwmon->power_table,"Power") != 0) {
 		dev_err(&pdev->dev, "Failed to get pwr_keys property\n");
@@ -305,97 +304,60 @@ static int apple_soc_smc_hwmon_probe(struct platform_device *pdev)
 	if (!apple_soc_smc_info)
 		return -ENOMEM;
 	
+	/* Filling Chip info entries (type and config)*/
 	/* Set the chip info entry to point after the channel info pointer list and the null entry */
-	chan_info_p = (struct hwmon_channel_info *)apple_soc_smc_info + 6; // 1 for chip info, 1 for power info, 1 for voltage, 1 for current, 1 for temp and 1 null entry so + 6
+	apple_soc_smc_info[0] = ( struct hwmon_channel_info *) (apple_soc_smc_info + 6); // 1 for chip info, 1 for power info, 1 for voltage, 1 for current, 1 for temp and 1 null entry so + 6
 
-	/* Set the config for this entry just at the end of the chan_info struct */
-	config = (u32 *)(chan_info_p + 1);
-	/* Set the config entries to their value. Here for the chip info and the null entry */
-	config[0] = HWMON_C_REGISTER_TZ;
-	config[1] = 0; // Null terminated config list
+	/* Set the channel info type and pointer to the config list just after */
+	apple_soc_smc_info[0]->type = hwmon_chip;
+	apple_soc_smc_info[0]->config = (u32 *)(apple_soc_smc_info[0] + 1);
 
-	/* Set the channel info value and pointer to the config list for the chip */
-	chan_info_p->type = hwmon_chip;
-	chan_info_p->config = config;
+	fill_config_entries((u32 *)apple_soc_smc_info[0]->config,HWMON_C_REGISTER_TZ,1);
 
-	/* Set this channel info struct in the chip info struct */
-	apple_soc_smc_info[0] = chan_info_p;
 
+	/* Filling Power sensors info entries (channel and configs)*/
 	/* Set the next channel info pointer just after the previous entry ie config + 3 in this case */
-	chan_info_p = ( struct hwmon_channel_info *) (config + 3); 
+	apple_soc_smc_info[1] = ( struct hwmon_channel_info *) (apple_soc_smc_info[0]->config + 3); 
 
-	/* Set the config for this entry just at the end of the chan_info struct */
-	config = (u32 *)(chan_info_p + 1);
+	/* Set the channel info type and pointer to the config list just after */
+	apple_soc_smc_info[1]->type = hwmon_power;
+	apple_soc_smc_info[1]->config = (u32 *)(apple_soc_smc_info[1] + 1);
 
-	/* Set the power config value for each power entry */
-	for(i=0;i<smc_hwmon->power_keys_cnt;i+=1) {
-		config[i] = HWMON_P_INPUT|HWMON_P_LABEL;
-	}
-	config[i] = 0; // Null terminated config list
+	fill_config_entries((u32 *)apple_soc_smc_info[1]->config,HWMON_P_INPUT|HWMON_P_LABEL,smc_hwmon->power_keys_cnt);
 
-	/* Set the channel info value and pointer to the config list for the power entry */
-	chan_info_p->type = hwmon_power;
-	chan_info_p->config = config;
 
-	/* Set this channel info struct in the chip info struct */
-	apple_soc_smc_info[1] = chan_info_p;
-
+	/* Filling Voltage(Input) sensors info entries (channel and config)*/
 	/* Set the next channel info pointer just after the previous entry ie config + smc_hwmon->power_keys_cnt + 1 for null +1 in this case */
-	chan_info_p = ( struct hwmon_channel_info *) (config + smc_hwmon->power_keys_cnt+1+1); 
+	apple_soc_smc_info[2] = ( struct hwmon_channel_info *) (apple_soc_smc_info[1]->config + smc_hwmon->power_keys_cnt+1+1); 
 
-	/* Set the config for this entry just at the end of the chan_info struct */
-	config = (u32 *)(chan_info_p + 1);
+	/* Set the channel info type and pointer to the config list just after */
+	apple_soc_smc_info[2]->type = hwmon_in;
+	apple_soc_smc_info[2]->config = (u32 *)(apple_soc_smc_info[2] + 1);
 
-	/* Set the power config value for each power entry */
-	for(i=0;i<smc_hwmon->voltage_keys_cnt;i+=1) {
-		config[i] = HWMON_I_INPUT|HWMON_I_LABEL;
-	}
-	config[i] = 0; // Null terminated config list
+	fill_config_entries((u32 *)apple_soc_smc_info[2]->config,HWMON_I_INPUT|HWMON_I_LABEL,smc_hwmon->voltage_keys_cnt);
 
-	/* Set the channel info value and pointer to the config list for the power entry */
-	chan_info_p->type = hwmon_in;
-	chan_info_p->config = config;
 
-	/* Set this channel info struct in the chip info struct */
-	apple_soc_smc_info[2] = chan_info_p;
-
+	/* Filling Current sensors info entries (channel and config)*/
 	/* Set the next channel info pointer just after the previous entry ie config + smc_hwmon->voltage_keys_cnt + 1 for null +1 in this case */
-	chan_info_p = ( struct hwmon_channel_info *) (config + smc_hwmon->voltage_keys_cnt+1+1); 
+	apple_soc_smc_info[3] = ( struct hwmon_channel_info *) (apple_soc_smc_info[2]->config + smc_hwmon->voltage_keys_cnt+1+1); 
 
-	/* Set the config for this entry just at the end of the chan_info struct */
-	config = (u32 *)(chan_info_p + 1);
+	/* Set the channel info type and pointer to the config list just after */
+	apple_soc_smc_info[3]->type = hwmon_curr;
+	apple_soc_smc_info[3]->config = (u32 *)(apple_soc_smc_info[3] + 1);
 
-	/* Set the power config value for each power entry */
-	for(i=0;i<smc_hwmon->current_keys_cnt;i+=1) {
-		config[i] = HWMON_C_INPUT|HWMON_C_LABEL;
-	}
-	config[i] = 0; // Null terminated config list
+	fill_config_entries((u32 *)apple_soc_smc_info[3]->config,HWMON_C_INPUT|HWMON_C_LABEL,smc_hwmon->current_keys_cnt);
 
-	/* Set the channel info value and pointer to the config list for the power entry */
-	chan_info_p->type = hwmon_curr;
-	chan_info_p->config = config;
 
-	/* Set this channel info struct in the chip info struct */
-	apple_soc_smc_info[3] = chan_info_p;
-
+	/* Filling Temp sensors info entries (channel and config)*/
 	/* Set the next channel info pointer just after the previous entry ie config + smc_hwmon->voltage_keys_cnt + 1 for null +1 in this case */
-	chan_info_p = ( struct hwmon_channel_info *) (config + smc_hwmon->current_keys_cnt+1+1); 
+	apple_soc_smc_info[4] = ( struct hwmon_channel_info *) (apple_soc_smc_info[3]->config + smc_hwmon->current_keys_cnt+1+1); 
 
-	/* Set the config for this entry just at the end of the chan_info struct */
-	config = (u32 *)(chan_info_p + 1);
+	/* Set the channel info type and pointer to the config list just after */
+	apple_soc_smc_info[4]->type = hwmon_temp;
+	apple_soc_smc_info[4]->config = (u32 *)(apple_soc_smc_info[4] + 1);
 
-	/* Set the power config value for each power entry */
-	for(i=0;i<smc_hwmon->temp_keys_cnt;i+=1) {
-		config[i] = HWMON_T_INPUT|HWMON_T_LABEL;
-	}
-	config[i] = 0; // Null terminated config list
+	fill_config_entries((u32 *)apple_soc_smc_info[4]->config,HWMON_T_INPUT|HWMON_T_LABEL,smc_hwmon->temp_keys_cnt);
 
-	/* Set the channel info value and pointer to the config list for the power entry */
-	chan_info_p->type = hwmon_temp;
-	chan_info_p->config = config;
-
-	/* Set this channel info struct in the chip info struct */
-	apple_soc_smc_info[4] = chan_info_p;
 
 	/* This is a null terminated pointer list, so last entry must be set to NULL */
 	apple_soc_smc_info[5] = NULL;
