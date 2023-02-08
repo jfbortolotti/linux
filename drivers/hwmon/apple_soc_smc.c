@@ -122,7 +122,7 @@ static int apple_soc_smc_read(struct device *dev, enum hwmon_sensor_types type,
 
 	switch (type) {
 	case hwmon_temp:
-		if (channel <= hwmon->temp_keys_cnt) {
+		if (channel < hwmon->temp_keys_cnt) {
 			ret = apple_smc_read_u32(smc, hwmon->temp_table[channel].smc_key, &vu32);
 			if (ret == 0)
 				*val = apple_soc_smc_float_to_int(vu32);
@@ -131,7 +131,7 @@ static int apple_soc_smc_read(struct device *dev, enum hwmon_sensor_types type,
 	break;
 
 	case hwmon_curr:
-		if (channel < hwmon->temp_keys_cnt) {
+		if (channel < hwmon->current_keys_cnt) {
 			ret = apple_smc_read_u32(smc, hwmon->current_table[channel].smc_key, &vu32);
 			if (ret == 0)
 				*val = apple_soc_smc_float_to_int(vu32);
@@ -202,7 +202,7 @@ static struct hwmon_chip_info apple_soc_smc_chip_info = {
 		.info = NULL,
 };
 
-static int fill_key_table(struct platform_device *pdev, char *prop, u32 *keys_cnt, struct channel_info **chan_table, char *label)
+static int fill_key_table_old(struct platform_device *pdev, char *prop, u32 *keys_cnt, struct channel_info **chan_table, char *label)
 {
 	struct device_node *np = pdev->dev.of_node;
 	const char *keys;
@@ -238,6 +238,48 @@ static int fill_key_table(struct platform_device *pdev, char *prop, u32 *keys_cn
 	return 0;
 }
 
+static int fill_key_table(struct platform_device *pdev, char *keys_node_name, u32 *keys_cnt, struct channel_info **chan_table, char *label)
+{
+	struct device_node *np = pdev->dev.of_node;
+	struct device_node *keys_np = NULL;
+	struct device_node *key_desc = NULL;
+	const char *keys;
+	const char *key;
+	int size, i;
+
+	*keys_cnt = 0;
+	*chan_table = NULL;
+
+	printk("np:%p keys_node_name:%s\n",np,keys_node_name);
+
+	keys_np = of_find_node_by_name(np,keys_node_name);
+	if (!keys_np)
+		return 0;
+
+	*keys_cnt = of_get_child_count(keys_np);
+	printk("keys_node_name:%s #childs: %d\n",keys_node_name,*keys_cnt);
+
+	if (*keys_cnt > 0) {
+		*chan_table = devm_kzalloc(&pdev->dev, sizeof(struct channel_info)*(*keys_cnt), GFP_KERNEL);
+		if (!(*chan_table))
+			return -ENOMEM;
+
+		i=0;
+		for_each_child_of_node(keys_np,key_desc){
+			printk("child node: %s, key:%s label:%s\n",(char *)of_node_full_name(key_desc),(char *)of_get_property(key_desc,"key",NULL),(char *)of_get_property(key_desc,"label",NULL));
+
+			(*chan_table)[i].smc_key = _SMC_KEY((char *)of_get_property(key_desc,"key",NULL));
+			strcpy((*chan_table)[i].label, (char *)of_get_property(key_desc,"label",NULL));
+
+			i += 1;
+
+		}
+
+	}
+
+	return 0;
+}
+
 static void fill_config_entries(u32 *config, u32 flags, u32 cnt)
 {
 	int i;
@@ -254,6 +296,7 @@ static int apple_soc_smc_hwmon_probe(struct platform_device *pdev)
 	struct device *dev = &pdev->dev;
 	struct macsmc_hwmon *smc_hwmon;
 	struct hwmon_channel_info **apple_soc_smc_info;
+	int index, offset;
 
 	if (!smc) {
 		dev_err(&pdev->dev, "No smc device pointer from parent device (check device tree)\n");
@@ -268,20 +311,24 @@ static int apple_soc_smc_hwmon_probe(struct platform_device *pdev)
 	smc_hwmon->dev = &pdev->dev;
 	smc_hwmon->smc = smc;
 
+	printk("JFB: Step1\n");
 	if (fill_key_table(pdev, "pwr_keys", &smc_hwmon->power_keys_cnt, &smc_hwmon->power_table, "Power") != 0) {
 		dev_err(&pdev->dev, "Failed to get pwr_keys property\n");
 		return -ENODEV;
 	}
+	printk("JFB: Step2\n");
 
 	if (fill_key_table(pdev, "temp_keys", &smc_hwmon->temp_keys_cnt, &smc_hwmon->temp_table, "Temp") != 0) {
 		dev_err(&pdev->dev, "Failed to get temp_keys property\n");
 		return -ENODEV;
 	}
+	printk("JFB: Step3\n");
 
 	if (fill_key_table(pdev, "voltage_keys", &smc_hwmon->voltage_keys_cnt, &smc_hwmon->voltage_table, "Voltage") != 0) {
 		dev_err(&pdev->dev, "Failed to get voltage_keys property\n");
 		return -ENODEV;
 	}
+	printk("JFB: Step4\n");
 
 	if (fill_key_table(pdev, "current_keys", &smc_hwmon->current_keys_cnt, &smc_hwmon->current_table, "Current") != 0) {
 		dev_err(&pdev->dev, "Failed to get current_keys property\n");
@@ -296,9 +343,13 @@ static int apple_soc_smc_hwmon_probe(struct platform_device *pdev)
 	 *	null entry, and so on.
 	 */
 
+	printk("JFB: Step5\n");
+
 	apple_soc_smc_info = devm_kzalloc(&pdev->dev, 3*sizeof(struct hwmon_channel_info *) + sizeof(struct hwmon_channel_info)*(1+1)+sizeof(u32)*(2+smc_hwmon->power_keys_cnt+1+smc_hwmon->voltage_keys_cnt+1+smc_hwmon->current_keys_cnt+1+smc_hwmon->temp_keys_cnt+1), GFP_KERNEL);
 	if (!apple_soc_smc_info)
 		return -ENOMEM;
+
+	printk("JFB: Step7\n");
 
 	/* Filling Chip info entries (type and config)*/
 	/* Set the chip info entry to point after the channel info pointer list and the null entry */
@@ -310,53 +361,78 @@ static int apple_soc_smc_hwmon_probe(struct platform_device *pdev)
 
 	fill_config_entries((u32 *)apple_soc_smc_info[0]->config, HWMON_C_REGISTER_TZ, 1);
 
+	index = 1;
+	offset = 3;
 
-	/* Filling Power sensors info entries (channel and configs)*/
-	/* Set the next channel info pointer just after the previous entry ie config + 3 in this case */
-	apple_soc_smc_info[1] = (struct hwmon_channel_info *)(apple_soc_smc_info[0]->config + 3);
+	printk("JFB: Step8\n");
 
-	/* Set the channel info type and pointer to the config list just after */
-	apple_soc_smc_info[1]->type = hwmon_power;
-	apple_soc_smc_info[1]->config = (u32 *)(apple_soc_smc_info[1] + 1);
+	if (smc_hwmon->power_keys_cnt > 0) {
+		/* Filling Power sensors info entries (channel and configs)*/
+		/* Set the next channel info pointer just after the previous entry ie config + 3 in this case */
+		apple_soc_smc_info[index] = (struct hwmon_channel_info *)(apple_soc_smc_info[index-1]->config + offset);
 
-	fill_config_entries((u32 *)apple_soc_smc_info[1]->config, HWMON_P_INPUT|HWMON_P_LABEL, smc_hwmon->power_keys_cnt);
+		/* Set the channel info type and pointer to the config list just after */
+		apple_soc_smc_info[index]->type = hwmon_power;
+		apple_soc_smc_info[index]->config = (u32 *)(apple_soc_smc_info[index] + 1);
 
+		fill_config_entries((u32 *)apple_soc_smc_info[index]->config, HWMON_P_INPUT|HWMON_P_LABEL, smc_hwmon->power_keys_cnt);
 
-	/* Filling Voltage(Input) sensors info entries (channel and config)*/
-	/* Set the next channel info pointer just after the previous entry ie config + smc_hwmon->power_keys_cnt + 1 for null +1 in this case */
-	apple_soc_smc_info[2] = (struct hwmon_channel_info *)(apple_soc_smc_info[1]->config + smc_hwmon->power_keys_cnt+1+1);
+		index += 1;
+		offset = smc_hwmon->power_keys_cnt+1+1;
+	}
 
-	/* Set the channel info type and pointer to the config list just after */
-	apple_soc_smc_info[2]->type = hwmon_in;
-	apple_soc_smc_info[2]->config = (u32 *)(apple_soc_smc_info[2] + 1);
+	printk("JFB: Step9\n");
 
-	fill_config_entries((u32 *)apple_soc_smc_info[2]->config, HWMON_I_INPUT|HWMON_I_LABEL, smc_hwmon->voltage_keys_cnt);
+	if (smc_hwmon->voltage_keys_cnt > 0) {
+		/* Filling Voltage(Input) sensors info entries (channel and config)*/
+		/* Set the next channel info pointer just after the previous entry ie config + smc_hwmon->power_keys_cnt + 1 for null +1 in this case */
+		apple_soc_smc_info[index] = (struct hwmon_channel_info *)(apple_soc_smc_info[index-1]->config + offset);
 
+		/* Set the channel info type and pointer to the config list just after */
+		apple_soc_smc_info[index]->type = hwmon_in;
+		apple_soc_smc_info[index]->config = (u32 *)(apple_soc_smc_info[index] + 1);
 
-	/* Filling Current sensors info entries (channel and config)*/
-	/* Set the next channel info pointer just after the previous entry ie config + smc_hwmon->voltage_keys_cnt + 1 for null +1 in this case */
-	apple_soc_smc_info[3] = (struct hwmon_channel_info *)(apple_soc_smc_info[2]->config + smc_hwmon->voltage_keys_cnt+1+1);
+		fill_config_entries((u32 *)apple_soc_smc_info[index]->config, HWMON_I_INPUT|HWMON_I_LABEL, smc_hwmon->voltage_keys_cnt);
 
-	/* Set the channel info type and pointer to the config list just after */
-	apple_soc_smc_info[3]->type = hwmon_curr;
-	apple_soc_smc_info[3]->config = (u32 *)(apple_soc_smc_info[3] + 1);
+		index += 1;
+		offset = smc_hwmon->voltage_keys_cnt+1+1;
+	}
+	printk("JFB: Step10\n");
 
-	fill_config_entries((u32 *)apple_soc_smc_info[3]->config, HWMON_C_INPUT|HWMON_C_LABEL, smc_hwmon->current_keys_cnt);
+	if (smc_hwmon->current_keys_cnt > 0) {
+		/* Filling Current sensors info entries (channel and config)*/
+		/* Set the next channel info pointer just after the previous entry ie config + smc_hwmon->voltage_keys_cnt + 1 for null +1 in this case */
+		apple_soc_smc_info[index] = (struct hwmon_channel_info *)(apple_soc_smc_info[index-1]->config + offset);
 
+		/* Set the channel info type and pointer to the config list just after */
+		apple_soc_smc_info[index]->type = hwmon_curr;
+		apple_soc_smc_info[index]->config = (u32 *)(apple_soc_smc_info[index] + 1);
 
-	/* Filling Temp sensors info entries (channel and config)*/
-	/* Set the next channel info pointer just after the previous entry ie config + smc_hwmon->voltage_keys_cnt + 1 for null +1 in this case */
-	apple_soc_smc_info[4] = (struct hwmon_channel_info *)(apple_soc_smc_info[3]->config + smc_hwmon->current_keys_cnt+1+1);
+		fill_config_entries((u32 *)apple_soc_smc_info[index]->config, HWMON_C_INPUT|HWMON_C_LABEL, smc_hwmon->current_keys_cnt);
 
-	/* Set the channel info type and pointer to the config list just after */
-	apple_soc_smc_info[4]->type = hwmon_temp;
-	apple_soc_smc_info[4]->config = (u32 *)(apple_soc_smc_info[4] + 1);
+		index += 1;
+		offset = smc_hwmon->current_keys_cnt+1+1;
+	}
+	printk("JFB: Step11\n");
 
-	fill_config_entries((u32 *)apple_soc_smc_info[4]->config, HWMON_T_INPUT|HWMON_T_LABEL, smc_hwmon->temp_keys_cnt);
+	if (smc_hwmon->temp_keys_cnt > 0) {
+		/* Filling Temp sensors info entries (channel and config)*/
+		/* Set the next channel info pointer just after the previous entry ie config + smc_hwmon->voltage_keys_cnt + 1 for null +1 in this case */
+		apple_soc_smc_info[index] = (struct hwmon_channel_info *)(apple_soc_smc_info[index-1]->config + offset);
 
+		/* Set the channel info type and pointer to the config list just after */
+		apple_soc_smc_info[index]->type = hwmon_temp;
+		apple_soc_smc_info[index]->config = (u32 *)(apple_soc_smc_info[index] + 1);
+
+		fill_config_entries((u32 *)apple_soc_smc_info[index]->config, HWMON_T_INPUT|HWMON_T_LABEL, smc_hwmon->temp_keys_cnt);
+
+		index += 1;
+	}
+
+	printk("JFB: Step12\n");
 
 	/* This is a null terminated pointer list, so last entry must be set to NULL */
-	apple_soc_smc_info[5] = NULL;
+	apple_soc_smc_info[index] = NULL;
 
 	/* This table must be set as the chip info entry to be register */
 	apple_soc_smc_chip_info.info = (const struct hwmon_channel_info **)apple_soc_smc_info;
