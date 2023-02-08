@@ -202,62 +202,21 @@ static struct hwmon_chip_info apple_soc_smc_chip_info = {
 		.info = NULL,
 };
 
-static int fill_key_table_old(struct platform_device *pdev, char *prop, u32 *keys_cnt, struct channel_info **chan_table, char *label)
-{
-	struct device_node *np = pdev->dev.of_node;
-	const char *keys;
-	const char *key;
-	int size, i;
-
-	keys = of_get_property(np, prop, &size);
-	if (!keys) {
-		dev_err(&pdev->dev, "Failed to get %s property\n", prop);
-		return -ENODEV;
-	}
-
-	/* Building the Power channel_info list */
-	*keys_cnt = size/5; // each key is 4 characters + null string termination => 5
-	*chan_table = devm_kzalloc(&pdev->dev, sizeof(struct channel_info)*(*keys_cnt), GFP_KERNEL);
-	if (!(*chan_table))
-		return -ENOMEM;
-
-	/* Filling the channel_info list with Power keys */
-	key = keys;
-	for (i = 0; i < *keys_cnt; i += 1) {
-
-		(*chan_table)[i].smc_key = _SMC_KEY(key);
-		strcpy((*chan_table)[i].label, label);
-		strcat((*chan_table)[i].label, " (");
-		strcat((*chan_table)[i].label, key);
-		strcat((*chan_table)[i].label, ")");
-
-		key = key + strlen(key)+1;
-
-	}
-
-	return 0;
-}
-
 static int fill_key_table(struct platform_device *pdev, char *keys_node_name, u32 *keys_cnt, struct channel_info **chan_table, char *label)
 {
-	struct device_node *np = pdev->dev.of_node;
+	struct device_node *np = of_find_node_by_name(NULL, "hwmon-sensors");
 	struct device_node *keys_np = NULL;
 	struct device_node *key_desc = NULL;
-	const char *keys;
-	const char *key;
-	int size, i;
+	int i;
 
 	*keys_cnt = 0;
 	*chan_table = NULL;
-
-	printk("np:%p keys_node_name:%s\n",np,keys_node_name);
 
 	keys_np = of_find_node_by_name(np,keys_node_name);
 	if (!keys_np)
 		return 0;
 
 	*keys_cnt = of_get_child_count(keys_np);
-	printk("keys_node_name:%s #childs: %d\n",keys_node_name,*keys_cnt);
 
 	if (*keys_cnt > 0) {
 		*chan_table = devm_kzalloc(&pdev->dev, sizeof(struct channel_info)*(*keys_cnt), GFP_KERNEL);
@@ -266,7 +225,6 @@ static int fill_key_table(struct platform_device *pdev, char *keys_node_name, u3
 
 		i=0;
 		for_each_child_of_node(keys_np,key_desc){
-			printk("child node: %s, key:%s label:%s\n",(char *)of_node_full_name(key_desc),(char *)of_get_property(key_desc,"key",NULL),(char *)of_get_property(key_desc,"label",NULL));
 
 			(*chan_table)[i].smc_key = _SMC_KEY((char *)of_get_property(key_desc,"key",NULL));
 			strcpy((*chan_table)[i].label, (char *)of_get_property(key_desc,"label",NULL));
@@ -302,7 +260,6 @@ static int apple_soc_smc_hwmon_probe(struct platform_device *pdev)
 		dev_err(&pdev->dev, "No smc device pointer from parent device (check device tree)\n");
 		return -ENODEV;
 	}
-	pdev->dev.of_node = of_find_node_by_name(NULL, "hwmon-sensors");
 
 	smc_hwmon = devm_kzalloc(&pdev->dev, sizeof(*smc_hwmon), GFP_KERNEL);
 	if (!smc_hwmon)
@@ -311,24 +268,20 @@ static int apple_soc_smc_hwmon_probe(struct platform_device *pdev)
 	smc_hwmon->dev = &pdev->dev;
 	smc_hwmon->smc = smc;
 
-	printk("JFB: Step1\n");
 	if (fill_key_table(pdev, "pwr_keys", &smc_hwmon->power_keys_cnt, &smc_hwmon->power_table, "Power") != 0) {
 		dev_err(&pdev->dev, "Failed to get pwr_keys property\n");
 		return -ENODEV;
 	}
-	printk("JFB: Step2\n");
 
 	if (fill_key_table(pdev, "temp_keys", &smc_hwmon->temp_keys_cnt, &smc_hwmon->temp_table, "Temp") != 0) {
 		dev_err(&pdev->dev, "Failed to get temp_keys property\n");
 		return -ENODEV;
 	}
-	printk("JFB: Step3\n");
 
 	if (fill_key_table(pdev, "voltage_keys", &smc_hwmon->voltage_keys_cnt, &smc_hwmon->voltage_table, "Voltage") != 0) {
 		dev_err(&pdev->dev, "Failed to get voltage_keys property\n");
 		return -ENODEV;
 	}
-	printk("JFB: Step4\n");
 
 	if (fill_key_table(pdev, "current_keys", &smc_hwmon->current_keys_cnt, &smc_hwmon->current_table, "Current") != 0) {
 		dev_err(&pdev->dev, "Failed to get current_keys property\n");
@@ -343,13 +296,10 @@ static int apple_soc_smc_hwmon_probe(struct platform_device *pdev)
 	 *	null entry, and so on.
 	 */
 
-	printk("JFB: Step5\n");
 
 	apple_soc_smc_info = devm_kzalloc(&pdev->dev, 3*sizeof(struct hwmon_channel_info *) + sizeof(struct hwmon_channel_info)*(1+1)+sizeof(u32)*(2+smc_hwmon->power_keys_cnt+1+smc_hwmon->voltage_keys_cnt+1+smc_hwmon->current_keys_cnt+1+smc_hwmon->temp_keys_cnt+1), GFP_KERNEL);
 	if (!apple_soc_smc_info)
 		return -ENOMEM;
-
-	printk("JFB: Step7\n");
 
 	/* Filling Chip info entries (type and config)*/
 	/* Set the chip info entry to point after the channel info pointer list and the null entry */
@@ -363,8 +313,6 @@ static int apple_soc_smc_hwmon_probe(struct platform_device *pdev)
 
 	index = 1;
 	offset = 3;
-
-	printk("JFB: Step8\n");
 
 	if (smc_hwmon->power_keys_cnt > 0) {
 		/* Filling Power sensors info entries (channel and configs)*/
@@ -381,8 +329,6 @@ static int apple_soc_smc_hwmon_probe(struct platform_device *pdev)
 		offset = smc_hwmon->power_keys_cnt+1+1;
 	}
 
-	printk("JFB: Step9\n");
-
 	if (smc_hwmon->voltage_keys_cnt > 0) {
 		/* Filling Voltage(Input) sensors info entries (channel and config)*/
 		/* Set the next channel info pointer just after the previous entry ie config + smc_hwmon->power_keys_cnt + 1 for null +1 in this case */
@@ -397,7 +343,6 @@ static int apple_soc_smc_hwmon_probe(struct platform_device *pdev)
 		index += 1;
 		offset = smc_hwmon->voltage_keys_cnt+1+1;
 	}
-	printk("JFB: Step10\n");
 
 	if (smc_hwmon->current_keys_cnt > 0) {
 		/* Filling Current sensors info entries (channel and config)*/
@@ -413,7 +358,6 @@ static int apple_soc_smc_hwmon_probe(struct platform_device *pdev)
 		index += 1;
 		offset = smc_hwmon->current_keys_cnt+1+1;
 	}
-	printk("JFB: Step11\n");
 
 	if (smc_hwmon->temp_keys_cnt > 0) {
 		/* Filling Temp sensors info entries (channel and config)*/
@@ -428,8 +372,6 @@ static int apple_soc_smc_hwmon_probe(struct platform_device *pdev)
 
 		index += 1;
 	}
-
-	printk("JFB: Step12\n");
 
 	/* This is a null terminated pointer list, so last entry must be set to NULL */
 	apple_soc_smc_info[index] = NULL;
