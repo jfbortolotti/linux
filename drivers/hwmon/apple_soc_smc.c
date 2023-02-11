@@ -5,6 +5,7 @@
  */
 
 #include <linux/ctype.h>
+#include <linux/minmax.h>
 #include <linux/of.h>
 #include <linux/of_platform.h>
 #include <linux/device.h>
@@ -66,9 +67,11 @@ static u32 apple_soc_smc_float_to_int(u32 flt)
 }
 
 
+#define MAX_LABEL_LEN 30
+
 struct channel_info {
 	u32 smc_key;
-	char label[60];
+	char label[MAX_LABEL_LEN];
 };
 
 
@@ -122,7 +125,7 @@ static int apple_soc_smc_read(struct device *dev, enum hwmon_sensor_types type,
 
 	switch (type) {
 	case hwmon_temp:
-		if (channel < hwmon->temp_keys_cnt) {
+		if ( (channel < hwmon->temp_keys_cnt) && (hwmon->temp_table[channel].smc_key != 0) ) {
 			ret = apple_smc_read_u32(smc, hwmon->temp_table[channel].smc_key, &vu32);
 			if (ret == 0)
 				*val = apple_soc_smc_float_to_int(vu32);
@@ -131,7 +134,7 @@ static int apple_soc_smc_read(struct device *dev, enum hwmon_sensor_types type,
 	break;
 
 	case hwmon_curr:
-		if (channel < hwmon->current_keys_cnt) {
+		if ( (channel < hwmon->current_keys_cnt) && (hwmon->current_table[channel].smc_key != 0) ) {
 			ret = apple_smc_read_u32(smc, hwmon->current_table[channel].smc_key, &vu32);
 			if (ret == 0)
 				*val = apple_soc_smc_float_to_int(vu32);
@@ -140,7 +143,7 @@ static int apple_soc_smc_read(struct device *dev, enum hwmon_sensor_types type,
 	break;
 
 	case hwmon_in:
-		if (channel < hwmon->voltage_keys_cnt) {
+		if ( (channel < hwmon->voltage_keys_cnt) && (hwmon->voltage_table[channel].smc_key != 0) ) {
 			ret = apple_smc_read_u32(smc, hwmon->voltage_table[channel].smc_key, &vu32);
 			if (ret == 0)
 				*val = apple_soc_smc_float_to_int(vu32);
@@ -149,7 +152,7 @@ static int apple_soc_smc_read(struct device *dev, enum hwmon_sensor_types type,
 	break;
 
 	case hwmon_power:
-		if (channel < hwmon->power_keys_cnt) {
+		if ( (channel < hwmon->power_keys_cnt) && (hwmon->power_table[channel].smc_key != 0) ) {
 			ret = apple_smc_get_key_info(smc, hwmon->power_table[channel].smc_key, &key_info);
 			if (ret == 0) {
 				if (key_info.type_code == 0x75693820) {
@@ -202,39 +205,69 @@ static struct hwmon_chip_info apple_soc_smc_chip_info = {
 		.info = NULL,
 };
 
-static int fill_key_table(struct platform_device *pdev, char *keys_node_name, u32 *keys_cnt, struct channel_info **chan_table, char *label)
+static int fill_key_table(struct platform_device *pdev, char *keys_node_name, u32 *keys_cnt, struct channel_info **chan_table)
 {
-	struct device_node *np = of_find_node_by_name(NULL, "hwmon-sensors");
+	struct device_node *sensors_node = NULL;
 	struct device_node *keys_np = NULL;
 	struct device_node *key_desc = NULL;
-	int i;
+	const char *label, *key_str;
+	int i, ret;
 
+
+	/* Set default values */
 	*keys_cnt = 0;
 	*chan_table = NULL;
 
-	keys_np = of_find_node_by_name(np,keys_node_name);
-	if (!keys_np)
+	sensors_node = of_find_node_by_name(NULL, "hwmon-sensors");
+	if (!sensors_node) {
+		dev_err(&pdev->dev, "No hwmon-sensors entry in device tree\n");
 		return 0;
+	}
+
+	keys_np = of_find_node_by_name(sensors_node,keys_node_name);
+	if (!keys_np) {
+		dev_err(&pdev->dev, "No %s entry in device tree\n",keys_node_name);
+		return 0;
+	}
 
 	*keys_cnt = of_get_child_count(keys_np);
 
+	dev_info(&pdev->dev,"Found %d SMC keys for %s\n", *keys_cnt, keys_node_name);
+
 	if (*keys_cnt > 0) {
 		*chan_table = devm_kzalloc(&pdev->dev, sizeof(struct channel_info)*(*keys_cnt), GFP_KERNEL);
-		if (!(*chan_table))
+		if (!(*chan_table)) {
+			of_node_put(keys_np);
 			return -ENOMEM;
-
-		i=0;
-		for_each_child_of_node(keys_np,key_desc){
-
-			(*chan_table)[i].smc_key = _SMC_KEY((char *)of_get_property(key_desc,"key",NULL));
-			strcpy((*chan_table)[i].label, (char *)of_get_property(key_desc,"label",NULL));
-
-			i += 1;
-
 		}
 
-	}
+		i=0;
+		for_each_child_of_node(keys_np,key_desc) {
 
+			dev_info(&pdev-> dev,"node child loop: %s\n", of_node_full_name(key_desc));
+
+			ret = of_property_read_string(key_desc,"key",&key_str);
+			if (ret != 0)
+				dev_err(&pdev->dev,"Missing key property for %s\n", of_node_full_name(key_desc));
+			else {
+				(*chan_table)[i].smc_key = _SMC_KEY(key_str);
+				dev_info(&pdev->dev, "Found SMC key: %s\n",key_str);
+			}
+
+			ret = of_property_read_string(key_desc, "label", &label);
+			if (ret != 0) {
+				dev_err(&pdev->dev,"Missing label property for %s. Using node name.\n", of_node_full_name(key_desc));
+				strncpy((*chan_table)[i].label, of_node_full_name(key_desc), min(strlen(of_node_full_name(key_desc)), (size_t)MAX_LABEL_LEN-1));
+			}
+			else {
+				strncpy((*chan_table)[i].label, label, min(strlen(label), (size_t)MAX_LABEL_LEN-1));
+				dev_info(&pdev->dev, "Found label: %s\n",label);
+			}
+
+			i += 1;
+		}
+	}
+	of_node_put(keys_np);
 	return 0;
 }
 
@@ -268,22 +301,22 @@ static int apple_soc_smc_hwmon_probe(struct platform_device *pdev)
 	smc_hwmon->dev = &pdev->dev;
 	smc_hwmon->smc = smc;
 
-	if (fill_key_table(pdev, "pwr_keys", &smc_hwmon->power_keys_cnt, &smc_hwmon->power_table, "Power") != 0) {
+	if (fill_key_table(pdev, "pwr_keys", &smc_hwmon->power_keys_cnt, &smc_hwmon->power_table) != 0) {
 		dev_err(&pdev->dev, "Failed to get pwr_keys property\n");
 		return -ENODEV;
 	}
 
-	if (fill_key_table(pdev, "temp_keys", &smc_hwmon->temp_keys_cnt, &smc_hwmon->temp_table, "Temp") != 0) {
+	if (fill_key_table(pdev, "temp_keys", &smc_hwmon->temp_keys_cnt, &smc_hwmon->temp_table) != 0) {
 		dev_err(&pdev->dev, "Failed to get temp_keys property\n");
 		return -ENODEV;
 	}
 
-	if (fill_key_table(pdev, "voltage_keys", &smc_hwmon->voltage_keys_cnt, &smc_hwmon->voltage_table, "Voltage") != 0) {
+	if (fill_key_table(pdev, "voltage_keys", &smc_hwmon->voltage_keys_cnt, &smc_hwmon->voltage_table) != 0) {
 		dev_err(&pdev->dev, "Failed to get voltage_keys property\n");
 		return -ENODEV;
 	}
 
-	if (fill_key_table(pdev, "current_keys", &smc_hwmon->current_keys_cnt, &smc_hwmon->current_table, "Current") != 0) {
+	if (fill_key_table(pdev, "current_keys", &smc_hwmon->current_keys_cnt, &smc_hwmon->current_table) != 0) {
 		dev_err(&pdev->dev, "Failed to get current_keys property\n");
 		return -ENODEV;
 	}
