@@ -278,6 +278,8 @@ static void fill_config_entries(u32 *config, u32 flags, u32 cnt)
 		config[i] = flags;
 
 	config[i] = 0;
+
+	printk("Jeff: config: %p i: %d &config[i]: %p\n",config, i , &config[i]);
 }
 
 static int apple_soc_smc_hwmon_probe(struct platform_device *pdev)
@@ -286,7 +288,8 @@ static int apple_soc_smc_hwmon_probe(struct platform_device *pdev)
 	struct device *dev = &pdev->dev;
 	struct macsmc_hwmon *smc_hwmon;
 	struct hwmon_channel_info **apple_soc_smc_info;
-	int index, offset;
+	int index, offset, n_chan_info_ptr;
+	unsigned int size;
 
 	if (!smc) {
 		dev_err(&pdev->dev, "No smc device pointer from parent device (check device tree)\n");
@@ -328,14 +331,34 @@ static int apple_soc_smc_hwmon_probe(struct platform_device *pdev)
 	 *	null entry, and so on.
 	 */
 
+	size = 2*sizeof(struct hwmon_channel_info *) + sizeof(struct hwmon_channel_info) + 2*sizeof(u32); // 2 pointers for chip and null entry
+	n_chan_info_ptr =2;
 
-	apple_soc_smc_info = devm_kzalloc(&pdev->dev, 3*sizeof(struct hwmon_channel_info *) + sizeof(struct hwmon_channel_info)*(1+1)+sizeof(u32)*(2+smc_hwmon->power_keys_cnt+1+smc_hwmon->voltage_keys_cnt+1+smc_hwmon->current_keys_cnt+1+smc_hwmon->temp_keys_cnt+1), GFP_KERNEL);
+	if (smc_hwmon->power_keys_cnt > 0) {
+		size += sizeof(struct hwmon_channel_info *) + sizeof(struct hwmon_channel_info) + sizeof(u32)*(smc_hwmon->power_keys_cnt+1);
+		n_chan_info_ptr += 1;
+	}
+	if (smc_hwmon->voltage_keys_cnt > 0) {
+		size += sizeof(struct hwmon_channel_info *) + sizeof(struct hwmon_channel_info) + sizeof(u32)*(smc_hwmon->voltage_keys_cnt+1);
+		n_chan_info_ptr += 1;
+	}
+	if (smc_hwmon->current_keys_cnt > 0) {
+		size += sizeof(struct hwmon_channel_info *) + sizeof(struct hwmon_channel_info) + sizeof(u32)*(smc_hwmon->current_keys_cnt+1);
+		n_chan_info_ptr += 1;
+	}
+	if (smc_hwmon->temp_keys_cnt > 0) {
+		size += sizeof(struct hwmon_channel_info *) + sizeof(struct hwmon_channel_info) + sizeof(u32)*(smc_hwmon->temp_keys_cnt+1);
+		n_chan_info_ptr += 1;
+	}
+
+
+	apple_soc_smc_info = devm_kzalloc(&pdev->dev, size, GFP_KERNEL);
 	if (!apple_soc_smc_info)
 		return -ENOMEM;
 
 	/* Filling Chip info entries (type and config)*/
 	/* Set the chip info entry to point after the channel info pointer list and the null entry */
-	apple_soc_smc_info[0] = (struct hwmon_channel_info *)(apple_soc_smc_info + 6); // 1 for chip info, 1 for power info, 1 for voltage, 1 for current, 1 for temp and 1 null entry so + 6
+	apple_soc_smc_info[0] = (struct hwmon_channel_info *)(apple_soc_smc_info + n_chan_info_ptr); // 1 for chip info, 1 for power info, 1 for voltage, 1 for current, 1 for temp and 1 null entry so + 6
 
 	/* Set the channel info type and pointer to the config list just after */
 	apple_soc_smc_info[0]->type = hwmon_chip;
@@ -344,7 +367,7 @@ static int apple_soc_smc_hwmon_probe(struct platform_device *pdev)
 	fill_config_entries((u32 *)apple_soc_smc_info[0]->config, HWMON_C_REGISTER_TZ, 1);
 
 	index = 1;
-	offset = 3;
+	offset = 2;
 
 	if (smc_hwmon->power_keys_cnt > 0) {
 		/* Filling Power sensors info entries (channel and configs)*/
@@ -358,7 +381,7 @@ static int apple_soc_smc_hwmon_probe(struct platform_device *pdev)
 		fill_config_entries((u32 *)apple_soc_smc_info[index]->config, HWMON_P_INPUT|HWMON_P_LABEL, smc_hwmon->power_keys_cnt);
 
 		index += 1;
-		offset = smc_hwmon->power_keys_cnt+1+1;
+		offset = smc_hwmon->power_keys_cnt+1;
 	}
 
 	if (smc_hwmon->voltage_keys_cnt > 0) {
@@ -373,7 +396,7 @@ static int apple_soc_smc_hwmon_probe(struct platform_device *pdev)
 		fill_config_entries((u32 *)apple_soc_smc_info[index]->config, HWMON_I_INPUT|HWMON_I_LABEL, smc_hwmon->voltage_keys_cnt);
 
 		index += 1;
-		offset = smc_hwmon->voltage_keys_cnt+1+1;
+		offset = smc_hwmon->voltage_keys_cnt+1;
 	}
 
 	if (smc_hwmon->current_keys_cnt > 0) {
@@ -388,12 +411,13 @@ static int apple_soc_smc_hwmon_probe(struct platform_device *pdev)
 		fill_config_entries((u32 *)apple_soc_smc_info[index]->config, HWMON_C_INPUT|HWMON_C_LABEL, smc_hwmon->current_keys_cnt);
 
 		index += 1;
-		offset = smc_hwmon->current_keys_cnt+1+1;
+		offset = smc_hwmon->current_keys_cnt+1;
 	}
 
 	if (smc_hwmon->temp_keys_cnt > 0) {
 		/* Filling Temp sensors info entries (channel and config)*/
 		/* Set the next channel info pointer just after the previous entry ie config + smc_hwmon->voltage_keys_cnt + 1 for null +1 in this case */
+
 		apple_soc_smc_info[index] = (struct hwmon_channel_info *)(apple_soc_smc_info[index-1]->config + offset);
 
 		/* Set the channel info type and pointer to the config list just after */
