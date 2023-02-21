@@ -27,46 +27,6 @@ struct macsmc_hwmon {
 	u32 power_keys_cnt, temp_keys_cnt, voltage_keys_cnt, current_keys_cnt;
 };
 
-static u32 apple_soc_smc_float_to_int(u32 flt)
-{
-	unsigned int sign, exp, mant;
-	unsigned long val;
-	int i, b;
-	s32 result;
-
-	sign = flt>>31;
-	exp = flt>>23;
-	mant = flt<<9>>9;
-
-	result = 0;
-	val = 0;
-	if (exp == 0 && mant != 0) {
-		for (i = 22; i >= 0; i -= 1) {
-			b = (mant&(1<<i))>>i;
-			val += b*(1000000000>>(23-i));
-		}
-		if (exp > 127)
-			result = (val<<(exp-127))/1000000;
-		else
-			result = (val>>(127-exp))/1000000;
-	} else if (!(exp == 0 && mant == 0)) {
-		for (i = 22; i >= 0; i -= 1) {
-			b = (mant&(1<<i))>>i;
-			val += b*(1000000000>>(23-i));
-		}
-		if (exp > 127)
-			result = ((val+1000000000)<<(exp-127))/1000000;
-		else
-			result = ((val+1000000000)>>(127-exp))/1000000;
-	}
-
-	if (sign == 1)
-		result *= -1;
-
-	return result;
-}
-
-
 #define MAX_LABEL_LEN 30
 
 struct channel_info {
@@ -120,33 +80,33 @@ static int apple_soc_smc_read(struct device *dev, enum hwmon_sensor_types type,
 	struct apple_smc_key_info key_info;
 
 	int ret = 0;
-	u32 vu32 = 0;
 	u8 vu8 = 0;
+	u32 vu32 = 0;
 
 	switch (type) {
 	case hwmon_temp:
 		if ((channel < hwmon->temp_keys_cnt) && (hwmon->temp_table[channel].smc_key != 0)) {
-			ret = apple_smc_read_u32(smc, hwmon->temp_table[channel].smc_key, &vu32);
+			ret = apple_smc_read_f32_scaled(smc, hwmon->temp_table[channel].smc_key, &vu32, 1000);
 			if (ret == 0)
-				*val = apple_soc_smc_float_to_int(vu32);
+				*val = vu32;
 		} else
 			ret = -EOPNOTSUPP;
 	break;
 
 	case hwmon_curr:
 		if ((channel < hwmon->current_keys_cnt) && (hwmon->current_table[channel].smc_key != 0)) {
-			ret = apple_smc_read_u32(smc, hwmon->current_table[channel].smc_key, &vu32);
+			ret = apple_smc_read_f32_scaled(smc, hwmon->current_table[channel].smc_key, &vu32, 1000);
 			if (ret == 0)
-				*val = apple_soc_smc_float_to_int(vu32);
+				*val = vu32;
 		} else
 			ret = -EOPNOTSUPP;
 	break;
 
 	case hwmon_in:
 		if ((channel < hwmon->voltage_keys_cnt) && (hwmon->voltage_table[channel].smc_key != 0)) {
-			ret = apple_smc_read_u32(smc, hwmon->voltage_table[channel].smc_key, &vu32);
+			ret = apple_smc_read_f32_scaled(smc, hwmon->voltage_table[channel].smc_key, &vu32, 1000);
 			if (ret == 0)
-				*val = apple_soc_smc_float_to_int(vu32);
+				*val = vu32;
 		} else
 			ret = -EOPNOTSUPP;
 	break;
@@ -160,9 +120,9 @@ static int apple_soc_smc_read(struct device *dev, enum hwmon_sensor_types type,
 					if (ret == 0)
 						*val = vu8;
 				} else if (key_info.type_code == 0x666C7420) {
-					ret = apple_smc_read_u32(smc, hwmon->power_table[channel].smc_key, &vu32);
+					ret = apple_smc_read_f32_scaled(smc, hwmon->power_table[channel].smc_key, &vu32, 1000);
 					if (ret == 0)
-						*val = apple_soc_smc_float_to_int(vu32);
+						*val = vu32;
 				} else
 					ret = -EOPNOTSUPP;
 			} else
