@@ -82,13 +82,27 @@ static int apple_soc_smc_read(struct device *dev, enum hwmon_sensor_types type,
 	int ret = 0;
 	u8 vu8 = 0;
 	u32 vu32 = 0;
+	u64 vu64 = 0;
 
 	switch (type) {
 	case hwmon_temp:
+		printk("Jeff: hwmon_temp read: channel: %d cnt: %d key: 0x%x\n", channel, hwmon->temp_keys_cnt, hwmon->temp_table[channel].smc_key);
 		if ((channel < hwmon->temp_keys_cnt) && (hwmon->temp_table[channel].smc_key != 0)) {
-			ret = apple_smc_read_f32_scaled(smc, hwmon->temp_table[channel].smc_key, &vu32, 1000);
-			if (ret == 0)
-				*val = vu32;
+			ret = apple_smc_get_key_info(smc, hwmon->temp_table[channel].smc_key, &key_info);
+			printk("Jeff: apple_smc_get_key_info ret: %d key_info.type_code: 0x%x \n",ret,key_info.type_code);
+			if (ret == 0 ) {
+				if (key_info.type_code == 0x666C7420) {
+					ret = apple_smc_read_f32_scaled(smc, hwmon->temp_table[channel].smc_key, &vu32, 1000);
+					if (ret == 0)
+						*val = vu32;
+				} else if (key_info.type_code == 0x696f6674) {
+					ret = apple_smc_read_u64(smc, hwmon->temp_table[channel].smc_key, &vu64);
+					if (ret == 0)
+						*val = vu64;
+				} else
+					ret = -EOPNOTSUPP;
+			} else
+				dev_err(dev, "Got an error on apple_smc_get_key_info\n");
 		} else
 			ret = -EOPNOTSUPP;
 	break;

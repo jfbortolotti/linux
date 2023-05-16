@@ -170,41 +170,767 @@
 
 		hwmon-sensors {
 			pwr_keys {
-				pwr_key01 {
-					key = "PHPC";
-					label = "Total CPU Core Power";
-				};
-				pwr_key02 {
-					key = "PSTR";
-					label = "Power of xxx";
-				};
-				pwr_key03 {
-					key = "PSTR";
-				};
-				pwr_key04 {
-				};
+                pwr_key0 {
+                    key = "PBLR";
+                };
+                pwr_key1 {
+                    key = "PDTR";
+                };
+                pwr_key2 {
+                    key = "PGDP";
+                };
+                pwr_key3 {
+                    key = "PHPB";
+                };
+                pwr_key4 {
+                    key = "PHPC";
+                };
+                pwr_key5 {
+                    key = "PHPM";
+                };
+                pwr_key6 {
+                    key = "PHPS";
+                };
+                pwr_key7 {
+                    key = "PKBC";
+                };
+                pwr_key8 {
+                    key = "PMVC";
+                };
+                pwr_key9 {
+                    key = "PO3R";
+                };
+                pwr_key10 {
+                    key = "PO5R";
+                };
+                pwr_key11 {
+                    key = "PP0b";
+                };
+                pwr_key12 {
+                    key = "PP0l";
+                };
+                pwr_key13 {
+                    key = "PP1b";
+                };
+                pwr_key14 {
+                    key = "PP2b";
+                };
+                pwr_key15 {
+                    key = "PP3b";
+                };
+                pwr_key16 {
+                    key = "PP3l";
+                };
+                pwr_key17 {
+                    key = "PP7b";
+                };
+                pwr_key18 {
+                    key = "PP7l";
+                };
+                pwr_key19 {
+                    key = "PP8b";
+                };
+                pwr_key20 {
+                    key = "PP9b";
+                };
+                pwr_key21 {
+                    key = "PP9l";
+                };
+                pwr_key22 {
+                    key = "PPBR";
+                };
+                pwr_key23 {
+                    key = "PPbb";
+                };
+                pwr_key24 {
+                    key = "PPeb";
+                };
+                pwr_key25 {
+                    key = "PR4b";
+                };
+                pwr_key26 {
+                    key = "PR4l";
+                };
+                pwr_key27 {
+                    key = "PR5b";
+                };
+                pwr_key28 {
+                    key = "PR6b";
+                };
+                pwr_key29 {
+                    key = "PR8l";
+                };
+                pwr_key30 {
+                    key = "PRab";
+                };
+                pwr_key31 {
+                    key = "PRbl";
+                };
+                pwr_key32 {
+                    key = "PRcb";
+                };
+                pwr_key33 {
+                    key = "PRcl";
+                };
+                pwr_key34 {
+                    key = "PRdb";
+                };
+                pwr_key35 {
+                    key = "PRkl";
+                };
+                pwr_key36 {
+                    key = "PSTR";
+                };
+                pwr_key37 {
+                    key = "PW3C";
+                };
+                pwr_key38 {
+                    key = "PZl0";
+                };
+                pwr_key39 {
+                    key = "PZlF";
+                };
+                pwr_key40 {
+                    key = "Pb0f";
+                };
 			};
 			temp_keys {
-				temp_key01 {
-					key = "TSCD";
-					label = "Battery Hotspot Temp";
-				};
-				temp_key02 {
-					key = "TH0x";
-					label = "NAND Hotspot Temp";
-				};
-				temp_key03 {
-					key = "Th1a";
-					label = "GPU Temp";
-				};
-				temp_key04 {
-					key = "TW0P";
-					label = "WiFi/BT Module Temp";
-				};
+                temp_key0 {
+                    key = "TB0T";
+                };
+                temp_key1 {
+                    key = "TB1T";
+                };
+                temp_key2 {
+                    key = "TB2T";
+                };
+                temp_key3 {
+                    key = "TCHP";
+                };
+                temp_key4 {
+                    key = "TCMb";
+                };
+                temp_key5 {
+                    key = "TCMz";
+                };
+                temp_key6 {
+                    key = "TG0B";
+                };
+                temp_key7 {
+                    key = "TG0C";
+                };
+                temp_key8 {
+                    key = "TG0H";
+                };
+                temp_key9 {
+                    key = "TG0V";
+                };
+                temp_key10 {
+                    key = "TG1B";
+                };
+                temp_key11 {
+                    key = "TG2B";
+                };
+                temp_key12 {
+                    key = "TH0T";
+                };
+                temp_key13 {
+                    key = "TH0x";
+                };
+                temp_key14 {
+                    key = "TIOP";
+                };
+                temp_key15 {
+                    key = "TMVR";
+                };
+                temp_key16 {
+                    key = "TPMP";
+                };
+                temp_key17 {
+                    key = "TPSP";
+                };
+                temp_key18 {
+                    key = "TR0Z";
+                };
+                temp_key19 {
+                    key = "TR1d";
+                };
+                temp_key20 {
+                    key = "TR2d";
+                };
+                temp_key21 {
+                    key = "TR3d";
+                };
+                temp_key22 {
+                    key = "TR4d";
+                };
+                temp_key23 {
+                    key = "TR5d";
+                };
+                temp_key24 {
+                    key = "TSCD";
+                };
+                temp_key25 {
+                    key = "TVA0";
+                };
+                temp_key26 {
+                    key = "TVD0";
+                };
+                temp_key27 {
+                    key = "TVS0";
+                };
+                temp_key28 {
+                    key = "TVS1";
+                };
+                temp_key29 {
+                    key = "TVSx";
+                };
+                temp_key30 {
+                    key = "TW0P";
+                };
+                temp_key31 {
+                    key = "Ta1a";
+                };
+                temp_key32 {
+                    key = "Ta1b";
+                };
+                temp_key33 {
+                    key = "Ta1x";
+                };
+                temp_key34 {
+                    key = "Ta1z";
+                };
+                temp_key35 {
+                    key = "Tarc";
+                };
+                temp_key36 {
+                    key = "Tc0a";
+                };
+                temp_key37 {
+                    key = "Tc0b";
+                };
+                temp_key38 {
+                    key = "Tc0x";
+                };
+                temp_key39 {
+                    key = "Tc0z";
+                };
+                temp_key40 {
+                    key = "Tc1a";
+                };
+                temp_key41 {
+                    key = "Tc1b";
+                };
+                temp_key42 {
+                    key = "Tc1x";
+                };
+                temp_key43 {
+                    key = "Tc1z";
+                };
+                temp_key44 {
+                    key = "Tc2a";
+                };
+                temp_key45 {
+                    key = "Tc2b";
+                };
+                temp_key46 {
+                    key = "Tc2x";
+                };
+                temp_key47 {
+                    key = "Tc2z";
+                };
+                temp_key48 {
+                    key = "Tc3a";
+                };
+                temp_key49 {
+                    key = "Tc3b";
+                };
+                temp_key50 {
+                    key = "Tc3x";
+                };
+                temp_key51 {
+                    key = "Tc3z";
+                };
+                temp_key52 {
+                    key = "Tc4a";
+                };
+                temp_key53 {
+                    key = "Tc4b";
+                };
+                temp_key54 {
+                    key = "Tc4x";
+                };
+                temp_key55 {
+                    key = "Tc4z";
+                };
+                temp_key56 {
+                    key = "Tc5a";
+                };
+                temp_key57 {
+                    key = "Tc5b";
+                };
+                temp_key58 {
+                    key = "Tc5x";
+                };
+                temp_key59 {
+                    key = "Tc5z";
+                };
+                temp_key60 {
+                    key = "Tc6a";
+                };
+                temp_key61 {
+                    key = "Tc6b";
+                };
+                temp_key62 {
+                    key = "Tc6x";
+                };
+                temp_key63 {
+                    key = "Tc6z";
+                };
+                temp_key64 {
+                    key = "Tc7a";
+                };
+                temp_key65 {
+                    key = "Tc7b";
+                };
+                temp_key66 {
+                    key = "Tc7x";
+                };
+                temp_key67 {
+                    key = "Tc7z";
+                };
+                temp_key68 {
+                    key = "Tc8a";
+                };
+                temp_key69 {
+                    key = "Tc8b";
+                };
+                temp_key70 {
+                    key = "Tc8x";
+                };
+                temp_key71 {
+                    key = "Tc8z";
+                };
+                temp_key72 {
+                    key = "Tc9a";
+                };
+                temp_key73 {
+                    key = "Tc9b";
+                };
+                temp_key74 {
+                    key = "Tc9x";
+                };
+                temp_key75 {
+                    key = "Tc9z";
+                };
+                temp_key76 {
+                    key = "Tcaa";
+                };
+                temp_key77 {
+                    key = "Tcab";
+                };
+                temp_key78 {
+                    key = "Tcax";
+                };
+                temp_key79 {
+                    key = "Tcaz";
+                };
+                temp_key80 {
+                    key = "Te0a";
+                };
+                temp_key81 {
+                    key = "Te0b";
+                };
+                temp_key82 {
+                    key = "Te0x";
+                };
+                temp_key83 {
+                    key = "Te0z";
+                };
+                temp_key84 {
+                    key = "Te3a";
+                };
+                temp_key85 {
+                    key = "Te3b";
+                };
+                temp_key86 {
+                    key = "Te3x";
+                };
+                temp_key87 {
+                    key = "Te3z";
+                };
+                temp_key88 {
+                    key = "Tg1b";
+                };
+                temp_key89 {
+                    key = "Tg4b";
+                };
+                temp_key90 {
+                    key = "Th0a";
+                };
+                temp_key91 {
+                    key = "Th0b";
+                };
+                temp_key92 {
+                    key = "Th0x";
+                };
+                temp_key93 {
+                    key = "Th0z";
+                };
+                temp_key94 {
+                    key = "Th1a";
+                };
+                temp_key95 {
+                    key = "Th1b";
+                };
+                temp_key96 {
+                    key = "Th1x";
+                };
+                temp_key97 {
+                    key = "Th1z";
+                };
+                temp_key98 {
+                    key = "Th2a";
+                };
+                temp_key99 {
+                    key = "Th2b";
+                };
+                temp_key100 {
+                    key = "Th2x";
+                };
+                temp_key101 {
+                    key = "Th2z";
+                };
+                temp_key102 {
+                    key = "Tp2a";
+                };
+                temp_key103 {
+                    key = "Tp2b";
+                };
+                temp_key104 {
+                    key = "Tp2x";
+                };
+                temp_key105 {
+                    key = "Tp2z";
+                };
+                temp_key106 {
+                    key = "Tp3a";
+                };
+                temp_key107 {
+                    key = "Tp3b";
+                };
+                temp_key108 {
+                    key = "Tp3x";
+                };
+                temp_key109 {
+                    key = "Tp3z";
+                };
+                temp_key110 {
+                    key = "Tp4a";
+                };
+                temp_key111 {
+                    key = "Tp4b";
+                };
+                temp_key112 {
+                    key = "Tp4x";
+                };
+                temp_key113 {
+                    key = "Tp4z";
+                };
+                temp_key114 {
+                    key = "Tp5a";
+                };
+                temp_key115 {
+                    key = "Tp5b";
+                };
+                temp_key116 {
+                    key = "Tp5x";
+                };
+                temp_key117 {
+                    key = "Tp5z";
+                };
+                temp_key118 {
+                    key = "Tp7a";
+                };
+                temp_key119 {
+                    key = "Tp7b";
+                };
+                temp_key120 {
+                    key = "Tp7x";
+                };
+                temp_key121 {
+                    key = "Tp7z";
+                };
+                temp_key122 {
+                    key = "Tp8a";
+                };
+                temp_key123 {
+                    key = "Tp8b";
+                };
+                temp_key124 {
+                    key = "Tp8x";
+                };
+                temp_key125 {
+                    key = "Tp8z";
+                };
+                temp_key126 {
+                    key = "Tp9a";
+                };
+                temp_key127 {
+                    key = "Tp9b";
+                };
+                temp_key128 {
+                    key = "Tp9x";
+                };
+                temp_key129 {
+                    key = "Tp9z";
+                };
+                temp_key130 {
+                    key = "Ts0a";
+                };
+                temp_key131 {
+                    key = "Ts0b";
+                };
+                temp_key132 {
+                    key = "Ts0x";
+                };
+                temp_key133 {
+                    key = "Ts0z";
+                };
+                temp_key134 {
+                    key = "Ts1a";
+                };
+                temp_key135 {
+                    key = "Ts1b";
+                };
+                temp_key136 {
+                    key = "Ts1x";
+                };
+                temp_key137 {
+                    key = "Ts1z";
+                };
+                temp_key138 {
+                    key = "Ts2a";
+                };
+                temp_key139 {
+                    key = "Ts2b";
+                };
+                temp_key140 {
+                    key = "Ts2x";
+                };
+                temp_key141 {
+                    key = "Ts2z";
+                };
+                temp_key142 {
+                    key = "Ts5a";
+                };
+                temp_key143 {
+                    key = "Ts5b";
+                };
+                temp_key144 {
+                    key = "Ts5x";
+                };
+                temp_key145 {
+                    key = "Ts5z";
+                };
 			};
 			current_keys {
+                current_key0 {
+                    key = "IBLR";
+                };
+                current_key1 {
+                    key = "ID0R";
+                };
+                current_key2 {
+                    key = "IKBC";
+                };
+                current_key3 {
+                    key = "IMVC";
+                };
+                current_key4 {
+                    key = "IO3R";
+                };
+                current_key5 {
+                    key = "IO5R";
+                };
+                current_key6 {
+                    key = "IP0b";
+                };
+                current_key7 {
+                    key = "IP0l";
+                };
+                current_key8 {
+                    key = "IP1b";
+                };
+                current_key9 {
+                    key = "IP2b";
+                };
+                current_key10 {
+                    key = "IP3b";
+                };
+                current_key11 {
+                    key = "IP3l";
+                };
+                current_key12 {
+                    key = "IP7b";
+                };
+                current_key13 {
+                    key = "IP7l";
+                };
+                current_key14 {
+                    key = "IP8b";
+                };
+                current_key15 {
+                    key = "IP9b";
+                };
+                current_key16 {
+                    key = "IP9l";
+                };
+                current_key17 {
+                    key = "IPBR";
+                };
+                current_key18 {
+                    key = "IPbb";
+                };
+                current_key19 {
+                    key = "IPeb";
+                };
+                current_key20 {
+                    key = "IR4b";
+                };
+                current_key21 {
+                    key = "IR4l";
+                };
+                current_key22 {
+                    key = "IR5b";
+                };
+                current_key23 {
+                    key = "IR6b";
+                };
+                current_key24 {
+                    key = "IR8l";
+                };
+                current_key25 {
+                    key = "IRab";
+                };
+                current_key26 {
+                    key = "IRbl";
+                };
+                current_key27 {
+                    key = "IRcb";
+                };
+                current_key28 {
+                    key = "IRcl";
+                };
+                current_key29 {
+                    key = "IRdb";
+                };
+                current_key30 {
+                    key = "IRkl";
+                };
+                current_key31 {
+                    key = "IW3C";
+                };
+                current_key32 {
+                    key = "Ib0f";
+                };
+                current_key33 {
+                    key = "Ib4f";
+                };
+                current_key34 {
+                    key = "Ib8f";
+                };
 			};
-	};
+			voltage_keys {
+                voltage_key0 {
+                    key = "VBUS";
+                };
+                voltage_key1 {
+                    key = "VD0R";
+                };
+                voltage_key2 {
+                    key = "VP0R";
+                };
+                voltage_key3 {
+                    key = "VP0b";
+                };
+                voltage_key4 {
+                    key = "VP0l";
+                };
+                voltage_key5 {
+                    key = "VP1b";
+                };
+                voltage_key6 {
+                    key = "VP2b";
+                };
+                voltage_key7 {
+                    key = "VP3b";
+                };
+                voltage_key8 {
+                    key = "VP3l";
+                };
+                voltage_key9 {
+                    key = "VP7b";
+                };
+                voltage_key10 {
+                    key = "VP7l";
+                };
+                voltage_key11 {
+                    key = "VP8b";
+                };
+                voltage_key12 {
+                    key = "VP9b";
+                };
+                voltage_key13 {
+                    key = "VP9l";
+                };
+                voltage_key14 {
+                    key = "VPbb";
+                };
+                voltage_key15 {
+                    key = "VPeb";
+                };
+                voltage_key16 {
+                    key = "VR4b";
+                };
+                voltage_key17 {
+                    key = "VR4l";
+                };
+                voltage_key18 {
+                    key = "VR5b";
+                };
+                voltage_key19 {
+                    key = "VR6b";
+                };
+                voltage_key20 {
+                    key = "VR8l";
+                };
+                voltage_key21 {
+                    key = "VRab";
+                };
+                voltage_key22 {
+                    key = "VRbl";
+                };
+                voltage_key23 {
+                    key = "VRcb";
+                };
+                voltage_key24 {
+                    key = "VRcl";
+                };
+                voltage_key25 {
+                    key = "VRdb";
+                };
+                voltage_key26 {
+                    key = "VRkl";
+                };
+                voltage_key27 {
+                    key = "Vb0f";
+                };
+                voltage_key28 {
+                    key = "Vb1f";
+                };
+    		};
+    	};
 };
 
 &framebuffer0 {
