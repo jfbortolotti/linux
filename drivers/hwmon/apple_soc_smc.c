@@ -252,8 +252,6 @@ static void fill_config_entries(u32 *config, u32 flags, u32 cnt)
 		config[i] = flags;
 
 	config[i] = 0;
-
-	printk("Jeff: config: %p i: %d &config[i]: %p\n",config, i , &config[i]);
 }
 
 static int apple_soc_smc_hwmon_probe(struct platform_device *pdev)
