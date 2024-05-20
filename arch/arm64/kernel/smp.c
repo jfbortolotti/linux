@@ -6,6 +6,8 @@
  * Copyright (C) 2012 ARM Ltd.
  */
 
+#define DEBUG
+
 #include <linux/acpi.h>
 #include <linux/arm_sdei.h>
 #include <linux/delay.h>
@@ -269,12 +271,16 @@ static int op_cpu_disable(unsigned int cpu)
 {
 	const struct cpu_operations *ops = get_cpu_ops(cpu);
 
+	pr_err("In op_cpu_disable\n");
+
 	/*
 	 * If we don't have a cpu_die method, abort before we reach the point
 	 * of no return. CPU0 may not have an cpu_ops, so test for it.
 	 */
-	if (!ops || !ops->cpu_die)
+	if (!ops || !ops->cpu_die) {
+		pr_err("In op_cpu_disable : return -EOPNOTSUPP %d",-EOPNOTSUPP);
 		return -EOPNOTSUPP;
+	}
 
 	/*
 	 * We may need to abort a hot unplug for some other mechanism-specific

@@ -207,6 +207,9 @@ void suspend_set_ops(const struct platform_suspend_ops *ops)
 {
 	unsigned int sleep_flags;
 
+	pr_info("In suspend_set_ops\n");
+	dump_stack();
+
 	sleep_flags = lock_system_sleep();
 
 	suspend_ops = ops;
@@ -398,6 +401,8 @@ static int suspend_enter(suspend_state_t state, bool *wakeup)
 {
 	int error;
 
+	pr_info("suspend_enter\n");
+
 	error = platform_suspend_prepare(state);
 	if (error)
 		goto Platform_finish;
@@ -423,11 +428,17 @@ static int suspend_enter(suspend_state_t state, bool *wakeup)
 	if (suspend_test(TEST_PLATFORM))
 		goto Platform_wake;
 
+	pr_info("Just before checking state: %d vs %d\n",state,PM_SUSPEND_TO_IDLE);
 	if (state == PM_SUSPEND_TO_IDLE) {
+		pr_info("Calling pm_sleep_disable_secondary_cpus before s2idle\n");
+		error = pm_sleep_disable_secondary_cpus();
+		if (error || suspend_test(TEST_CPUS))
+			goto Enable_cpus;
 		s2idle_loop();
-		goto Platform_wake;
+		goto Enable_cpus;
 	}
 
+	pr_info("Just before calling pm_sleep_disable_secondary_cpus\n");
 	error = pm_sleep_disable_secondary_cpus();
 	if (error || suspend_test(TEST_CPUS))
 		goto Enable_cpus;
@@ -461,6 +472,7 @@ static int suspend_enter(suspend_state_t state, bool *wakeup)
 	pm_sleep_enable_secondary_cpus();
 
  Platform_wake:
+	pr_info("Platorm wake\n");
 	platform_resume_noirq(state);
 	dpm_resume_noirq(PMSG_RESUME);
 
@@ -601,6 +613,7 @@ static int enter_state(suspend_state_t state)
 	return error;
 }
 
+u8 get_battery_capacity(void);
 /**
  * pm_suspend - Externally visible function for suspending the system.
  * @state: System sleep state to enter.
@@ -612,9 +625,12 @@ int pm_suspend(suspend_state_t state)
 {
 	int error;
 
+	dump_stack();
+	
 	if (state <= PM_SUSPEND_ON || state >= PM_SUSPEND_MAX)
 		return -EINVAL;
 
+	pr_info("Battery capacity: %d\n",get_battery_capacity());
 	pr_info("suspend entry (%s)\n", mem_sleep_labels[state]);
 	error = enter_state(state);
 	if (error) {
@@ -624,6 +640,7 @@ int pm_suspend(suspend_state_t state)
 		suspend_stats.success++;
 	}
 	pr_info("suspend exit\n");
+	pr_info("Battery capacity: %d\n",get_battery_capacity());
 	return error;
 }
 EXPORT_SYMBOL(pm_suspend);

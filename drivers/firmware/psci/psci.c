@@ -60,6 +60,11 @@ typedef unsigned long (psci_fn)(unsigned long, unsigned long,
 				unsigned long, unsigned long);
 static psci_fn *invoke_psci_fn;
 
+static unsigned long
+__invoke_psci_fn_stub(unsigned long function_id,
+		     unsigned long arg0, unsigned long arg1,
+		     unsigned long arg2);
+
 static struct psci_0_1_function_ids psci_0_1_function_ids;
 
 struct psci_0_1_function_ids get_psci_0_1_function_ids(void)
@@ -269,6 +274,7 @@ static unsigned long psci_migrate_info_up_cpu(void)
 
 static void set_conduit(enum arm_smccc_conduit conduit)
 {
+#if 0
 	switch (conduit) {
 	case SMCCC_CONDUIT_HVC:
 		invoke_psci_fn = __invoke_psci_fn_hvc;
@@ -279,6 +285,9 @@ static void set_conduit(enum arm_smccc_conduit conduit)
 	default:
 		WARN(1, "Unexpected PSCI conduit %d\n", conduit);
 	}
+#endif
+
+	invoke_psci_fn = __invoke_psci_fn_stub;
 
 	psci_conduit = conduit;
 }
@@ -789,3 +798,82 @@ int __init psci_acpi_init(void)
 	return psci_probe();
 }
 #endif
+
+
+static unsigned long
+__invoke_psci_fn_stub(unsigned long function_id,
+		     unsigned long arg0, unsigned long arg1,
+		     unsigned long arg2)
+{
+	unsigned long ret;
+
+	switch (function_id) {
+		case PSCI_0_2_FN_PSCI_VERSION:
+			ret = PSCI_VERSION(1,0);
+		break;
+
+		case PSCI_0_2_FN_MIGRATE_INFO_TYPE:
+			ret = PSCI_RET_NOT_SUPPORTED;
+		break;
+
+		case PSCI_0_2_FN64_CPU_ON:
+			// arg0 = cpuid
+			// arg1 = entry point
+
+			ret = PSCI_RET_SUCCESS;
+
+			switch (arg0) {
+				case 1:
+					writeq_relaxed(arg1,(void *)0x210150000);
+					iowrite32(2,(void *)0x23b754004);
+					iowrite32(2,(void *)0x23b754008);
+				break;
+
+				case 2:
+					writeq_relaxed(arg1,(void *)0x210250000);
+					iowrite32(4,(void *)0x23b754004);
+					iowrite32(4,(void *)0x23b754008);
+				break;
+
+				case 3:
+					writeq_relaxed(arg1,(void *)0x210350000);
+					iowrite32(8,(void *)0x23b754004);
+					iowrite32(8,(void *)0x23b754008);
+				break;
+
+				case 4:
+					writeq_relaxed(arg1,(void *)0x211050000);
+					iowrite32(0x10,(void *)0x23b754004);
+					iowrite32(1,(void *)0x23b754008);
+				break;
+
+				case 5:
+					writeq_relaxed(arg1,(void *)0x211150000);
+					iowrite32(0x20,(void *)0x23b754004);
+					iowrite32(2,(void *)0x23b754008);
+				break;
+
+				case 6:
+					writeq_relaxed(arg1,(void *)0x211250000);
+					iowrite32(0x40,(void *)0x23b754004);
+					iowrite32(4,(void *)0x23b754008);
+				break;
+
+				case 7:
+					writeq_relaxed(arg1,(void *)0x211350000);
+					iowrite32(0x80,(void *)0x23b754004);
+					iowrite32(8,(void *)0x23b754008);
+				break;
+
+				default:
+					ret = PSCI_RET_INVALID_PARAMS;
+				
+			}
+		break;
+
+		default:
+			ret = PSCI_RET_NOT_SUPPORTED;
+	}
+
+	return ret;
+}

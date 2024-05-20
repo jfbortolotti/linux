@@ -3,6 +3,9 @@
  *
  * This code is licenced under the GPL.
  */
+
+ #define DEBUG
+
 #include <linux/sched/mm.h>
 #include <linux/proc_fs.h>
 #include <linux/smp.h>
@@ -1417,6 +1420,7 @@ static int cpuhp_down_callbacks(unsigned int cpu, struct cpuhp_cpu_state *st,
 							    prev_state));
 	}
 
+	pr_err("cpuhp_down_callbacks ret:%d",ret);
 	return ret;
 }
 
@@ -1426,6 +1430,8 @@ static int __ref _cpu_down(unsigned int cpu, int tasks_frozen,
 {
 	struct cpuhp_cpu_state *st = per_cpu_ptr(&cpuhp_state, cpu);
 	int prev_state, ret = 0;
+
+	pr_err("In _cpu_down\n");
 
 	if (num_online_cpus() == 1)
 		return -EBUSY;
@@ -1437,18 +1443,25 @@ static int __ref _cpu_down(unsigned int cpu, int tasks_frozen,
 
 	cpuhp_tasks_frozen = tasks_frozen;
 
+	pr_err("In _cpu_down before calling cpuhp_set_state\n");
+
 	prev_state = cpuhp_set_state(cpu, st, target);
 	/*
 	 * If the current CPU state is in the range of the AP hotplug thread,
 	 * then we need to kick the thread.
 	 */
+	pr_err("In _cpu_down before if on cphp_teardown_cpu\n");
+
 	if (st->state > CPUHP_TEARDOWN_CPU) {
 		st->target = max((int)target, CPUHP_TEARDOWN_CPU);
+		pr_err("In _cpu_down: calling cpuhp_kick_ap_work\n");
+
 		ret = cpuhp_kick_ap_work(cpu);
 		/*
 		 * The AP side has done the error rollback already. Just
 		 * return the error code..
 		 */
+		pr_err("In _cpu_down before checking ret for cpuhp_kick_ap_work ret:%d\n",ret);
 		if (ret)
 			goto out;
 
@@ -1456,6 +1469,7 @@ static int __ref _cpu_down(unsigned int cpu, int tasks_frozen,
 		 * We might have stopped still in the range of the AP hotplug
 		 * thread. Nothing to do anymore.
 		 */
+		pr_err("In _cpu_down before checking rcpuhp_teardown_state\n");
 		if (st->state > CPUHP_TEARDOWN_CPU)
 			goto out;
 
@@ -1465,9 +1479,12 @@ static int __ref _cpu_down(unsigned int cpu, int tasks_frozen,
 	 * The AP brought itself down to CPUHP_TEARDOWN_CPU. So we need
 	 * to do the further cleanups.
 	 */
+	pr_err("In _cpu_down before calling cpuhp_down_callbacks\n");
 	ret = cpuhp_down_callbacks(cpu, st, target);
+	pr_err("In _cpu_down after calling cpuhp_down_callbacks ret:%d\n",ret);
 	if (ret && st->state < prev_state) {
 		if (st->state == CPUHP_TEARDOWN_CPU) {
+			pr_err("In _cpu_down: calling cpuhp_reset_state & __cpuhp_kick_ap\n");
 			cpuhp_reset_state(cpu, st, prev_state);
 			__cpuhp_kick_ap(st);
 		} else {
@@ -1476,6 +1493,8 @@ static int __ref _cpu_down(unsigned int cpu, int tasks_frozen,
 	}
 
 out:
+	pr_err("In _cpu_down out label, ret:%d\n",ret);
+
 	cpus_write_unlock();
 	/*
 	 * Do post unplug cleanup. This is still protected against
@@ -1502,6 +1521,7 @@ static long __cpu_down_maps_locked(void *arg)
 static int cpu_down_maps_locked(unsigned int cpu, enum cpuhp_state target)
 {
 	struct cpu_down_work work = { .cpu = cpu, .target = target, };
+
 
 	/*
 	 * If the platform does not support hotplug, report it explicitly to

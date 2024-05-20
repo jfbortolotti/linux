@@ -45,11 +45,11 @@ static const struct kernel_param_ops macsmc_log_power_ops = {
         .get = param_get_bool,
 };
 
-static bool log_power = false;
+static bool log_power = true;
 module_param_cb(log_power, &macsmc_log_power_ops, &log_power, 0644);
 MODULE_PARM_DESC(log_power, "Periodically log power consumption for debugging");
 
-#define POWER_LOG_INTERVAL (HZ)
+#define POWER_LOG_INTERVAL ((HZ)*10)
 
 static struct macsmc_power *g_power;
 
@@ -86,6 +86,50 @@ static void macsmc_do_dbg(struct macsmc_power *power)
 	s32 p_bat = 0;
 	s16 t_full = 0, t_empty = 0;
 	u8 charge = 0;
+	int p_blr=0, p_gdp=0, p_hpb=0, p_hpm=0, p_hps=0, p_kbc=0, p_mvc=0, p_o3r=0, p_o5r=0, p_p0b=0, p_p0l=0,p_p1b=0,p_p2b=0, p_p3b=0, p_p3l=0, p_p8b=0, p_p7b=0, p_p7l=0, p_p9b=0, p_p9l=0, p_pbr=0, p_pbb=0, p_peb=0, p_r4b=0, p_r4l=0, p_r5b=0, p_r6b=0, p_r8l=0,p_rab=0, p_rbl=0, p_rcb=0, p_rcl=0, p_rdb=0, p_rkl=0, p_w3c=0, p_zl0=0, p_b0f=0;
+	u8 p_zlf=0;
+
+	apple_smc_read_f32_scaled(power->smc, SMC_KEY(PBLR), &p_blr, 1000);
+	apple_smc_read_f32_scaled(power->smc, SMC_KEY(PGDP), &p_gdp, 1000);
+	apple_smc_read_f32_scaled(power->smc, SMC_KEY(PHPB), &p_hpb, 1000);
+	apple_smc_read_f32_scaled(power->smc, SMC_KEY(PHPM), &p_hpm, 1000);
+	apple_smc_read_f32_scaled(power->smc, SMC_KEY(PHPS), &p_hps, 1000);
+	apple_smc_read_f32_scaled(power->smc, SMC_KEY(PKBC), &p_kbc, 1000);
+	apple_smc_read_f32_scaled(power->smc, SMC_KEY(PMVC), &p_mvc, 1000);
+	apple_smc_read_f32_scaled(power->smc, SMC_KEY(PO3R), &p_o3r, 1000);
+
+	apple_smc_read_f32_scaled(power->smc, SMC_KEY(PO5R), &p_o5r, 1000);
+	apple_smc_read_f32_scaled(power->smc, SMC_KEY(PP0b), &p_p0b, 1000);
+	apple_smc_read_f32_scaled(power->smc, SMC_KEY(PP0l), &p_p0l, 1000);
+	apple_smc_read_f32_scaled(power->smc, SMC_KEY(PP1b), &p_p1b, 1000);
+	apple_smc_read_f32_scaled(power->smc, SMC_KEY(PP2b), &p_p2b, 1000);
+	apple_smc_read_f32_scaled(power->smc, SMC_KEY(PP3b), &p_p3b, 1000);
+	apple_smc_read_f32_scaled(power->smc, SMC_KEY(PP3l), &p_p3l, 1000);
+	apple_smc_read_f32_scaled(power->smc, SMC_KEY(PP8b), &p_p8b, 1000);
+
+
+	apple_smc_read_f32_scaled(power->smc, SMC_KEY(PP7b), &p_p7b, 1000);
+	apple_smc_read_f32_scaled(power->smc, SMC_KEY(PP7l), &p_p7l, 1000);
+	apple_smc_read_f32_scaled(power->smc, SMC_KEY(PP9b), &p_p9b, 1000);
+	apple_smc_read_f32_scaled(power->smc, SMC_KEY(PP9l), &p_p9l, 1000);
+	apple_smc_read_f32_scaled(power->smc, SMC_KEY(PPBR), &p_pbr, 1000);
+	apple_smc_read_f32_scaled(power->smc, SMC_KEY(PPbb), &p_pbb, 1000);
+	apple_smc_read_f32_scaled(power->smc, SMC_KEY(PPeb), &p_peb, 1000);
+	apple_smc_read_f32_scaled(power->smc, SMC_KEY(PR4b), &p_r4b, 1000);
+	apple_smc_read_f32_scaled(power->smc, SMC_KEY(PR4l), &p_r4l, 1000);
+	apple_smc_read_f32_scaled(power->smc, SMC_KEY(PR5b), &p_r5b, 1000);
+	apple_smc_read_f32_scaled(power->smc, SMC_KEY(PR6b), &p_r6b, 1000);
+	apple_smc_read_f32_scaled(power->smc, SMC_KEY(PR8l), &p_r8l, 1000);
+	apple_smc_read_f32_scaled(power->smc, SMC_KEY(PRab), &p_rab, 1000);
+	apple_smc_read_f32_scaled(power->smc, SMC_KEY(PRbl), &p_rbl, 1000);
+	apple_smc_read_f32_scaled(power->smc, SMC_KEY(PRcb), &p_rcb, 1000);
+	apple_smc_read_f32_scaled(power->smc, SMC_KEY(PRcl), &p_rcl, 1000);
+	apple_smc_read_f32_scaled(power->smc, SMC_KEY(PRdb), &p_rdb, 1000);
+	apple_smc_read_f32_scaled(power->smc, SMC_KEY(PRkl), &p_rkl, 1000);
+	apple_smc_read_f32_scaled(power->smc, SMC_KEY(PW3C), &p_w3c, 1000);
+	apple_smc_read_f32_scaled(power->smc, SMC_KEY(PZl0), &p_zl0, 1000);
+	apple_smc_read_u8(power->smc, SMC_KEY(PZlF), &p_zlf);
+	apple_smc_read_f32_scaled(power->smc, SMC_KEY(Pb0f), &p_b0f, 1000);
 
 	apple_smc_read_f32_scaled(power->smc, SMC_KEY(PDTR), &p_in, 1000);
 	apple_smc_read_f32_scaled(power->smc, SMC_KEY(PSTR), &p_sys, 1000);
@@ -107,7 +151,33 @@ static void macsmc_do_dbg(struct macsmc_power *power)
 		 FD3(p_cpu), FD3(p_bat), charge,
 		 t_full >= 0 ? "full" : "empty",
 		 t_full >= 0 ? t_full : t_empty);
+
+	dev_info(power->dev,
+		 "PBLR %2d.%03dW PGDP %2d.%03dW PHPB %2d.%03dW PHPM %2d.%03dW PHPS %2d.%03dW "
+		 "PKBC %2d.%03dW PMVC %2d.%03dW PO3R %2d.%03dW PO5R %2d.%03dW PP0b %2d.%03dW "
+		 "PP0l %2d.%03dW PP1b %2d.%03dW PP2b %2d.%03dW PP3b %2d.%03dW PP3l %2d.%03dW "
+		 "PP8b %2d.%03dW PP7b %2d.%03dW PP7l %2d.%03dW PP9b %2d.%03dW PP9l %2d.%03dW "
+		 "PPBR %2d.%03dW PPbb %2d.%03dW PPeb %2d.%03dW PR4b %2d.%03dW PR4l %2d.%03dW "
+		 
+		 "PR5b %2d.%03dW PR6b %2d.%03dW PR8l %2d.%03dW PRab %2d.%03dW PRbl %2d.%03dW "
+		 "PRcb %2d.%03dW PRcl %2d.%03dW PRdl %2d.%03dW PRkl %2d.%03dW PW3C %2d.%03dW "
+		 "PZl0 %2d.%03dW PZlF %dW Pb0f %2d.%03dW \n",
+		 FD3(p_blr), FD3(p_gdp), FD3(p_hpb), FD3(p_hpm), FD3(p_hps), FD3(p_kbc),
+		 FD3(p_mvc), FD3(p_o3r), FD3(p_o5r), FD3(p_p0b), FD3(p_p0l), FD3(p_p1b),
+		 FD3(p_p2b), FD3(p_p3b), FD3(p_p3l), FD3(p_p8b), FD3(p_p7b), FD3(p_p7l),
+		 FD3(p_p9b), FD3(p_p9l), FD3(p_pbr), FD3(p_pbb), FD3(p_peb), FD3(p_r4b),
+		 FD3(p_r4l), FD3(p_r5b), FD3(p_r6b), FD3(p_r8l), FD3(p_rab), FD3(p_rbl),
+		 FD3(p_rcb), FD3(p_rcl), FD3(p_rdb), FD3(p_rkl), FD3(p_w3c), FD3(p_zl0),
+		 p_zlf, FD3(p_b0f));
+
 #undef FD3
+}
+
+u8 get_battery_capacity(void){
+	u8 vu8=0;
+
+	apple_smc_read_u8(g_power->smc, SMC_KEY(BUIC), &vu8);
+	return vu8;
 }
 
 static int macsmc_battery_get_status(struct macsmc_power *power)

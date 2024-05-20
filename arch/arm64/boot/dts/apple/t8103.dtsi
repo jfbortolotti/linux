@@ -20,6 +20,11 @@
 	#address-cells = <2>;
 	#size-cells = <2>;
 
+    psci {
+		compatible = "arm,psci-1.0";
+		method = "smc";
+	};
+
 	aliases {
 		gpu = &gpu;
 	};
@@ -78,7 +83,7 @@
 			compatible = "apple,icestorm";
 			device_type = "cpu";
 			reg = <0x0 0x1>;
-			enable-method = "spin-table";
+			enable-method = "psci";
 			cpu-release-addr = <0 0>; /* To be filled by loader */
 			operating-points-v2 = <&ecluster_opp>;
 			capacity-dmips-mhz = <714>;
