@@ -807,6 +807,8 @@ __invoke_psci_fn_stub(unsigned long function_id,
 {
 	unsigned long ret;
 
+	pr_info("Jeff: __invoke_psci_fn_stub\n");
+
 	switch (function_id) {
 		case PSCI_0_2_FN_PSCI_VERSION:
 			ret = PSCI_VERSION(1,0);
@@ -823,6 +825,10 @@ __invoke_psci_fn_stub(unsigned long function_id,
 			ret = PSCI_RET_SUCCESS;
 
 			switch (arg0) {
+				case 1:
+					pr_info("Jeff: CPU_ON for %ld\n",arg0);
+				break;
+#if 0
 				case 1:
 					writeq_relaxed(arg1,(void *)0x210150000);
 					iowrite32(2,(void *)0x23b754004);
@@ -864,8 +870,9 @@ __invoke_psci_fn_stub(unsigned long function_id,
 					iowrite32(0x80,(void *)0x23b754004);
 					iowrite32(8,(void *)0x23b754008);
 				break;
-
+#endif
 				default:
+					pr_info("Jeff: CPU_ON returning PSCI_RET_INVALID_PARAMS.\n");
 					ret = PSCI_RET_INVALID_PARAMS;
 				
 			}

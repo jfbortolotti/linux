@@ -116,6 +116,7 @@ int __cpu_up(unsigned int cpu, struct task_struct *idle)
 	int ret;
 	long status;
 
+	pr_info("Jeff: in kernel/smp.c __cpu_up, booting CPU %d\n",cpu);
 	/*
 	 * We need to tell the secondary core where to find its stack and the
 	 * page tables.

@@ -68,6 +68,8 @@ static int smp_spin_table_cpu_prepare(unsigned int cpu)
 	__le64 __iomem *release_addr;
 	phys_addr_t pa_holding_pen = __pa_symbol(secondary_holding_pen);
 
+	pr_info("Jeff: smp_spintable: calling smp_spin_table_cpu_prepare : %d\n",cpu);
+
 	if (!cpu_release_addr[cpu])
 		return -ENODEV;
 
@@ -106,6 +108,8 @@ static int smp_spin_table_cpu_prepare(unsigned int cpu)
 
 static int smp_spin_table_cpu_boot(unsigned int cpu)
 {
+
+	pr_info("Jeff: smp_spintable: calling smp_spin_table_cpu_boot : %d\n",cpu);
 	/*
 	 * Update the pen release flag.
 	 */

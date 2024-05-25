@@ -5,7 +5,7 @@
  * Copyright The Asahi Linux Contributors
  */
 
-#define DEBUG
+//#define DEBUG
 
 #include <linux/bitops.h>
 #include <linux/bitfield.h>
