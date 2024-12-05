@@ -26,6 +26,8 @@
 
 #include "power.h"
 
+#undef DEBUG
+
 #define GENPD_RETRY_MAX_MS	250		/* Approximate */
 
 #define GENPD_DEV_CALLBACK(genpd, type, callback, dev)		\

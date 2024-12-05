@@ -18,6 +18,8 @@
 #define pr_fmt(fmt) "PM: " fmt
 #define dev_fmt pr_fmt
 
+#undef DEBUG
+
 #include <linux/device.h>
 #include <linux/export.h>
 #include <linux/mutex.h>
@@ -37,6 +39,7 @@
 
 #include "../base.h"
 #include "power.h"
+
 
 typedef int (*pm_callback_t)(struct device *);
 

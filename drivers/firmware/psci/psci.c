@@ -7,6 +7,7 @@
 #define pr_fmt(fmt) "psci: " fmt
 
 #include <linux/acpi.h>
+#include <linux/delay.h>
 #include <linux/arm-smccc.h>
 #include <linux/cpuidle.h>
 #include <linux/debugfs.h>
@@ -29,6 +30,9 @@
 #include <asm/smp_plat.h>
 #include <asm/suspend.h>
 
+#include <linux/mm.h>
+#include <asm/io.h>
+
 /*
  * While a 64-bit OS can make calls with SMC32 calling conventions, for some
  * calls it is necessary to use SMC64 to pass or return 64-bit values.
@@ -40,6 +44,10 @@
 #else
 #define PSCI_FN_NATIVE(version, name)	PSCI_##version##_FN_##name
 #endif
+
+extern void secondary_holding_pen(void);
+extern volatile unsigned long secondary_holding_pen_release;
+extern phys_addr_t cpu_release_addr[NR_CPUS];
 
 /*
  * The CPU any Trusted OS is resident on. The trusted OS may reject CPU_OFF
@@ -800,6 +808,9 @@ int __init psci_acpi_init(void)
 #endif
 
 
+static int cpu_on(unsigned long cpu_id, unsigned long entry_addr);
+
+
 static unsigned long
 __invoke_psci_fn_stub(unsigned long function_id,
 		     unsigned long arg0, unsigned long arg1,
@@ -807,7 +818,7 @@ __invoke_psci_fn_stub(unsigned long function_id,
 {
 	unsigned long ret;
 
-	pr_info("Jeff: __invoke_psci_fn_stub\n");
+	pr_info("Jeff: __invoke_psci_fn_stub: fct: %lx\n",function_id);
 
 	switch (function_id) {
 		case PSCI_0_2_FN_PSCI_VERSION:
@@ -824,11 +835,18 @@ __invoke_psci_fn_stub(unsigned long function_id,
 
 			ret = PSCI_RET_SUCCESS;
 
+			pr_info("Jeff: CPU_ON for %ld\n",arg0);
+			ret = cpu_on(arg0,arg1);
+			pr_info("Jeff: cpu_on returned: %ld\n",ret);
+		break;
+
+#if 0
 			switch (arg0) {
 				case 1:
 					pr_info("Jeff: CPU_ON for %ld\n",arg0);
+					ret = cpu_on(arg0,arg1);
+					pr_info("Jeff: cpu_on returned: %ld\n",ret);
 				break;
-#if 0
 				case 1:
 					writeq_relaxed(arg1,(void *)0x210150000);
 					iowrite32(2,(void *)0x23b754004);
@@ -870,17 +888,81 @@ __invoke_psci_fn_stub(unsigned long function_id,
 					iowrite32(0x80,(void *)0x23b754004);
 					iowrite32(8,(void *)0x23b754008);
 				break;
-#endif
+
 				default:
 					pr_info("Jeff: CPU_ON returning PSCI_RET_INVALID_PARAMS.\n");
 					ret = PSCI_RET_INVALID_PARAMS;
 				
 			}
-		break;
-
+#endif
 		default:
 			ret = PSCI_RET_NOT_SUPPORTED;
 	}
 
 	return ret;
+}
+
+extern int smp_spin_table_cpu_init(unsigned int cpu);
+
+static int cpu_on(unsigned long cpu_id, unsigned long entry_addr)
+{
+	__le64 __iomem *release_addr;
+	phys_addr_t pa_holding_pen = __pa_symbol(secondary_holding_pen);
+	void *start = (void *)&secondary_holding_pen_release;
+	unsigned long size = sizeof(secondary_holding_pen_release);
+	unsigned long cpu_rel_addr = 0x803b3c1f0; // 803a801f0;
+
+	smp_spin_table_cpu_init((unsigned int) cpu_id);
+
+	pr_info("Jeff: cpu_on => cpu: %ld  / address: 0x%lx\n",cpu_id,entry_addr);
+	pr_info("Jeff: cpu_on => secondary_holding_pen: %llx  / pa_holding_pen: 0x%llx\n",(u64)secondary_holding_pen,(u64)pa_holding_pen);
+	pr_info("Jeff: cpu_on => global cpu_release_addr: %llx local cpu_rel_addr: %lx\n",(u64)cpu_release_addr[cpu_id],cpu_rel_addr);
+	
+	if (!entry_addr)
+		return PSCI_RET_INVALID_ADDRESS;
+
+	/*
+	* The cpu-release-addr may or may not be inside the linear mapping.
+	* As ioremap_cache will either give us a new mapping or reuse the
+	* existing linear mapping, we can use it to cover both cases. In
+	* either case the memory will be MT_NORMAL.
+	*/
+	release_addr = ioremap_cache(cpu_release_addr[cpu_id],
+					sizeof(*release_addr));
+	if (!release_addr)
+		return PSCI_RET_INVALID_PARAMS;
+
+	/*
+	* We write the release address as LE regardless of the native
+	* endianness of the kernel. Therefore, any boot-loaders that
+	* read this address need to convert this address to the
+	* boot-loader's endianness before jumping. This is mandated by
+	* the boot protocol.
+	*/
+	writeq_relaxed((phys_addr_t)pa_holding_pen, release_addr);
+	dcache_clean_inval_poc((__force unsigned long)release_addr,
+				(__force unsigned long)release_addr +
+					sizeof(*release_addr));
+
+	/*
+	* Send an event to wake up the secondary CPU.
+	*/
+	sev();
+
+	iounmap(release_addr);
+
+	mdelay(2000);
+
+	/*
+	 * Update the pen release flag.
+	 */
+	secondary_holding_pen_release = cpu_id;
+	dcache_clean_inval_poc((unsigned long)start, (unsigned long)start + size);
+
+	/*
+	 * Send an event, causing the secondaries to read pen_release.
+	 */
+	sev();
+
+	return PSCI_RET_SUCCESS;
 }

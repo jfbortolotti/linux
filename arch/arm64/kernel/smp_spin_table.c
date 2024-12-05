@@ -22,7 +22,7 @@ extern void secondary_holding_pen(void);
 volatile unsigned long __section(".mmuoff.data.read")
 secondary_holding_pen_release = INVALID_HWID;
 
-static phys_addr_t cpu_release_addr[NR_CPUS];
+phys_addr_t cpu_release_addr[NR_CPUS];
 
 /*
  * Write secondary_holding_pen_release in a way that is guaranteed to be
@@ -40,7 +40,7 @@ static void write_pen_release(u64 val)
 }
 
 
-static int smp_spin_table_cpu_init(unsigned int cpu)
+int smp_spin_table_cpu_init(unsigned int cpu)
 {
 	struct device_node *dn;
 	int ret;
@@ -60,6 +60,8 @@ static int smp_spin_table_cpu_init(unsigned int cpu)
 
 	of_node_put(dn);
 
+	pr_info("Jeff: cpu:%d cpu_release_addr: %llx\n",cpu,(u64)cpu_release_addr[cpu]);
+
 	return ret;
 }
 
@@ -69,6 +71,7 @@ static int smp_spin_table_cpu_prepare(unsigned int cpu)
 	phys_addr_t pa_holding_pen = __pa_symbol(secondary_holding_pen);
 
 	pr_info("Jeff: smp_spintable: calling smp_spin_table_cpu_prepare : %d\n",cpu);
+	pr_info("Jeff: secondary_holding_pen:%llx pa_holding_pen:%llx release_addr:%llx",(u64)secondary_holding_pen,(u64)pa_holding_pen,(u64)cpu_release_addr[cpu]);
 
 	if (!cpu_release_addr[cpu])
 		return -ENODEV;
@@ -109,7 +112,7 @@ static int smp_spin_table_cpu_prepare(unsigned int cpu)
 static int smp_spin_table_cpu_boot(unsigned int cpu)
 {
 
-	pr_info("Jeff: smp_spintable: calling smp_spin_table_cpu_boot : %d\n",cpu);
+	pr_info("Jeff: smp_spintable: calling smp_spin_table_cpu_boot : %d logical_map:%llx\n",cpu,cpu_logical_map(cpu));
 	/*
 	 * Update the pen release flag.
 	 */
