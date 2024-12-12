@@ -177,6 +177,8 @@ static int cpuhp_invoke_callback(unsigned int cpu, enum cpuhp_state state,
 	int (*cb)(unsigned int cpu);
 	int ret, cnt;
 
+	pr_err("Jeff: cpuhp_invoke_callback bringup:%d multi:%d state:%d step_empty:%d step->teardown.single:%p",bringup,step->multi_instance,state,cpuhp_step_empty(bringup, step),step->teardown.single);
+
 	if (st->fail == state) {
 		st->fail = CPUHP_INVALID;
 		return -EAGAIN;
@@ -742,6 +744,7 @@ cpuhp_reset_state(int cpu, struct cpuhp_cpu_state *st,
 /* Regular hotplug invocation of the AP hotplug thread */
 static void __cpuhp_kick_ap(struct cpuhp_cpu_state *st)
 {
+	pr_err("Jeff: __cpuhp_kick_ap");
 	if (!st->single && st->state == st->target)
 		return;
 
@@ -761,6 +764,8 @@ static int cpuhp_kick_ap(int cpu, struct cpuhp_cpu_state *st,
 {
 	enum cpuhp_state prev_state;
 	int ret;
+	
+	pr_err("Jeff: cpuhp_kick_ap");
 
 	prev_state = cpuhp_set_state(cpu, st, target);
 	__cpuhp_kick_ap(st);
@@ -913,6 +918,7 @@ static bool cpuhp_next_state(bool bringup,
 			     struct cpuhp_cpu_state *st,
 			     enum cpuhp_state target)
 {
+	pr_err("Jeff: cpuhp_next_state");
 	do {
 		if (bringup) {
 			if (st->state >= target)
@@ -1044,6 +1050,8 @@ static void cpuhp_thread_fun(unsigned int cpu)
 	bool bringup = st->bringup;
 	enum cpuhp_state state;
 
+	pr_err("Jeff: cpuhp_thread_fun cpu:%d",cpu);
+
 	if (WARN_ON_ONCE(!st->should_run))
 		return;
 
@@ -1111,6 +1119,8 @@ cpuhp_invoke_ap_callback(int cpu, enum cpuhp_state state, bool bringup,
 	struct cpuhp_cpu_state *st = per_cpu_ptr(&cpuhp_state, cpu);
 	int ret;
 
+	pr_err("Jeff: cpuhp_invoke_ap_callback");
+
 	if (!cpu_online(cpu))
 		return 0;
 
@@ -1160,6 +1170,8 @@ static int cpuhp_kick_ap_work(unsigned int cpu)
 	struct cpuhp_cpu_state *st = per_cpu_ptr(&cpuhp_state, cpu);
 	enum cpuhp_state prev_state = st->state;
 	int ret;
+
+	pr_err("Jeff: cpuhp_kick_ap_work");
 
 	cpuhp_lock_acquire(false);
 	cpuhp_lock_release(false);
@@ -1426,6 +1438,8 @@ static int __ref _cpu_down(unsigned int cpu, int tasks_frozen,
 {
 	struct cpuhp_cpu_state *st = per_cpu_ptr(&cpuhp_state, cpu);
 	int prev_state, ret = 0;
+
+	pr_err("Jeff: _cpu_down");
 
 	if (num_online_cpus() == 1)
 		return -EBUSY;
@@ -1910,6 +1924,8 @@ static cpumask_var_t frozen_cpus;
 int freeze_secondary_cpus(int primary)
 {
 	int cpu, error = 0;
+
+	pr_err("Jeff: freeze_secondary_cpus");
 
 	cpu_maps_update_begin();
 	if (primary == -1) {

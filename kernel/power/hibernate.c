@@ -294,6 +294,8 @@ static int create_image(int platform_mode)
 {
 	int error;
 
+	pr_err("Jeff: %s %s",__FILE__,__FUNCTION__);
+
 	error = dpm_suspend_end(PMSG_FREEZE);
 	if (error) {
 		pr_err("Some devices failed to power down, aborting\n");
@@ -371,6 +373,8 @@ int hibernation_snapshot(int platform_mode)
 {
 	pm_message_t msg;
 	int error;
+
+	pr_err("Jeff: %s %s",__FILE__,__FUNCTION__);
 
 	pm_suspend_clear_flags();
 	error = platform_begin(platform_mode);
@@ -460,6 +464,8 @@ static int resume_target_kernel(bool platform_mode)
 {
 	int error;
 
+	pr_err("Jeff: %s %s",__FILE__,__FUNCTION__);
+
 	error = dpm_suspend_end(PMSG_QUIESCE);
 	if (error) {
 		pr_err("Some devices failed to power down, aborting resume\n");
@@ -537,6 +543,8 @@ int hibernation_restore(int platform_mode)
 {
 	int error;
 
+	pr_err("Jeff: %s %s",__FILE__,__FUNCTION__);
+
 	pm_prepare_console();
 	suspend_console();
 	pm_restrict_gfp_mask();
@@ -563,6 +571,8 @@ int hibernation_restore(int platform_mode)
 int hibernation_platform_enter(void)
 {
 	int error;
+
+	pr_err("Jeff: %s %s",__FILE__,__FUNCTION__);
 
 	if (!hibernation_ops)
 		return -ENOSYS;
@@ -642,6 +652,8 @@ int hibernation_platform_enter(void)
  */
 static void power_down(void)
 {
+	pr_err("Jeff: %s %s",__FILE__,__FUNCTION__);
+
 #ifdef CONFIG_SUSPEND
 	int error;
 
@@ -689,6 +701,8 @@ static int load_image_and_restore(bool snapshot_test)
 	int error;
 	unsigned int flags;
 
+	pr_err("Jeff: %s %s",__FILE__,__FUNCTION__);
+
 	pm_pr_dbg("Loading hibernation image.\n");
 
 	lock_device_hotplug();
@@ -720,6 +734,8 @@ int hibernate(void)
 	bool snapshot_test = false;
 	unsigned int sleep_flags;
 	int error;
+
+	pr_err("Jeff: %s %s",__FILE__,__FUNCTION__);
 
 	if (!hibernation_available()) {
 		pm_pr_dbg("Hibernation not available.\n");
@@ -817,6 +833,8 @@ int hibernate_quiet_exec(int (*func)(void *data), void *data)
 {
 	unsigned int sleep_flags;
 	int error;
+
+	pr_err("Jeff: %s %s",__FILE__,__FUNCTION__);
 
 	sleep_flags = lock_system_sleep();
 

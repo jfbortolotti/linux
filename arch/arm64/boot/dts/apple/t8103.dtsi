@@ -33,30 +33,9 @@
 				core0 {
 					cpu = <&cpu_e0>;
 				};
-				core1 {
-					cpu = <&cpu_e1>;
-				};
-				core2 {
-					cpu = <&cpu_e2>;
-				};
-				core3 {
-					cpu = <&cpu_e3>;
-				};
 			};
 
 			cluster1 {
-				core0 {
-					cpu = <&cpu_p0>;
-				};
-				core1 {
-					cpu = <&cpu_p1>;
-				};
-				core2 {
-					cpu = <&cpu_p2>;
-				};
-				core3 {
-					cpu = <&cpu_p3>;
-				};
 			};
 		};
 
@@ -72,104 +51,6 @@
 			next-level-cache = <&l2_cache_0>;
 			i-cache-size = <0x20000>;
 			d-cache-size = <0x10000>;
-		};
-
-		cpu_e1: cpu@1 {
-			compatible = "apple,icestorm";
-			device_type = "cpu";
-			reg = <0x0 0x1>;
-			enable-method = "spin-table";
-			cpu-release-addr = <0 0>; /* To be filled by loader */
-			operating-points-v2 = <&ecluster_opp>;
-			capacity-dmips-mhz = <714>;
-			performance-domains = <&cpufreq_e>;
-			next-level-cache = <&l2_cache_0>;
-			i-cache-size = <0x20000>;
-			d-cache-size = <0x10000>;
-		};
-
-		cpu_e2: cpu@2 {
-			compatible = "apple,icestorm";
-			device_type = "cpu";
-			reg = <0x0 0x2>;
-			enable-method = "spin-table";
-			cpu-release-addr = <0 0>; /* To be filled by loader */
-			operating-points-v2 = <&ecluster_opp>;
-			capacity-dmips-mhz = <714>;
-			performance-domains = <&cpufreq_e>;
-			next-level-cache = <&l2_cache_0>;
-			i-cache-size = <0x20000>;
-			d-cache-size = <0x10000>;
-		};
-
-		cpu_e3: cpu@3 {
-			compatible = "apple,icestorm";
-			device_type = "cpu";
-			reg = <0x0 0x3>;
-			enable-method = "spin-table";
-			cpu-release-addr = <0 0>; /* To be filled by loader */
-			operating-points-v2 = <&ecluster_opp>;
-			capacity-dmips-mhz = <714>;
-			performance-domains = <&cpufreq_e>;
-			next-level-cache = <&l2_cache_0>;
-			i-cache-size = <0x20000>;
-			d-cache-size = <0x10000>;
-		};
-
-		cpu_p0: cpu@10100 {
-			compatible = "apple,firestorm";
-			device_type = "cpu";
-			reg = <0x0 0x10100>;
-			enable-method = "spin-table";
-			cpu-release-addr = <0 0>; /* To be filled by loader */
-			operating-points-v2 = <&pcluster_opp>;
-			capacity-dmips-mhz = <1024>;
-			performance-domains = <&cpufreq_p>;
-			next-level-cache = <&l2_cache_1>;
-			i-cache-size = <0x30000>;
-			d-cache-size = <0x20000>;
-		};
-
-		cpu_p1: cpu@10101 {
-			compatible = "apple,firestorm";
-			device_type = "cpu";
-			reg = <0x0 0x10101>;
-			enable-method = "spin-table";
-			cpu-release-addr = <0 0>; /* To be filled by loader */
-			operating-points-v2 = <&pcluster_opp>;
-			capacity-dmips-mhz = <1024>;
-			performance-domains = <&cpufreq_p>;
-			next-level-cache = <&l2_cache_1>;
-			i-cache-size = <0x30000>;
-			d-cache-size = <0x20000>;
-		};
-
-		cpu_p2: cpu@10102 {
-			compatible = "apple,firestorm";
-			device_type = "cpu";
-			reg = <0x0 0x10102>;
-			enable-method = "spin-table";
-			cpu-release-addr = <0 0>; /* To be filled by loader */
-			operating-points-v2 = <&pcluster_opp>;
-			capacity-dmips-mhz = <1024>;
-			performance-domains = <&cpufreq_p>;
-			next-level-cache = <&l2_cache_1>;
-			i-cache-size = <0x30000>;
-			d-cache-size = <0x20000>;
-		};
-
-		cpu_p3: cpu@10103 {
-			compatible = "apple,firestorm";
-			device_type = "cpu";
-			reg = <0x0 0x10103>;
-			enable-method = "spin-table";
-			cpu-release-addr = <0 0>; /* To be filled by loader */
-			operating-points-v2 = <&pcluster_opp>;
-			capacity-dmips-mhz = <1024>;
-			performance-domains = <&cpufreq_p>;
-			next-level-cache = <&l2_cache_1>;
-			i-cache-size = <0x30000>;
-			d-cache-size = <0x20000>;
 		};
 
 		l2_cache_0: l2-cache-0 {
@@ -911,13 +792,9 @@
 			affinities {
 				e-core-pmu-affinity {
 					apple,fiq-index = <AIC_CPU_PMU_E>;
-					cpus = <&cpu_e0 &cpu_e1 &cpu_e2 &cpu_e3>;
+					cpus = <&cpu_e0>;
 				};
 
-				p-core-pmu-affinity {
-					apple,fiq-index = <AIC_CPU_PMU_P>;
-					cpus = <&cpu_p0 &cpu_p1 &cpu_p2 &cpu_p3>;
-				};
 			};
 		};
 
