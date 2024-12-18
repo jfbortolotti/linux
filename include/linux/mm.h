@@ -3114,9 +3114,10 @@ static inline unsigned long get_num_physpages(void)
 	int nid;
 	unsigned long phys_pages = 0;
 
-	for_each_online_node(nid)
+	for_each_online_node(nid){
 		phys_pages += node_present_pages(nid);
-
+		pr_err("Jeff: %s:%d %s nid:%d phys_pages:%ld",__FILE__,__LINE__,__FUNCTION__,nid,phys_pages);
+	}
 	return phys_pages;
 }
 

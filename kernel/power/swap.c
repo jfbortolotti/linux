@@ -317,6 +317,9 @@ static int mark_swapfiles(struct swap_map_handle *handle, unsigned int flags)
 	int error;
 
 	hib_submit_io(REQ_OP_READ, swsusp_resume_block, swsusp_header, NULL);
+
+	pr_err("Jeff: %s",swsusp_header->sig);
+	
 	if (!memcmp("SWAP-SPACE",swsusp_header->sig, 10) ||
 	    !memcmp("SWAPSPACE2",swsusp_header->sig, 10)) {
 		memcpy(swsusp_header->orig_sig,swsusp_header->sig, 10);
@@ -348,6 +351,8 @@ static int swsusp_swap_check(void)
 {
 	int res;
 
+	pr_err("Jeff: %s %s %d",__FILE__, __FUNCTION__, __LINE__);
+
 	if (swsusp_resume_device)
 		res = swap_type_of(swsusp_resume_device, swsusp_resume_block);
 	else
@@ -356,14 +361,20 @@ static int swsusp_swap_check(void)
 		return res;
 	root_swap = res;
 
+	pr_err("Jeff: %s %s %d",__FILE__, __FUNCTION__, __LINE__);
+
 	hib_resume_bdev = blkdev_get_by_dev(swsusp_resume_device,
 			BLK_OPEN_WRITE, NULL, NULL);
 	if (IS_ERR(hib_resume_bdev))
 		return PTR_ERR(hib_resume_bdev);
 
+	pr_err("Jeff: %s %s %d",__FILE__, __FUNCTION__, __LINE__);
+
 	res = set_blocksize(hib_resume_bdev, PAGE_SIZE);
 	if (res < 0)
 		blkdev_put(hib_resume_bdev, NULL);
+
+	pr_err("Jeff: %s %s %d return:%d",__FILE__, __FUNCTION__, __LINE__,res);
 
 	return res;
 }

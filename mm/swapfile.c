@@ -1645,26 +1645,36 @@ int swap_type_of(dev_t device, sector_t offset)
 {
 	int type;
 
+	pr_err("Jeff: %s %s %d",__FILE__, __FUNCTION__, __LINE__);
+
 	if (!device)
 		return -1;
+
+	pr_err("Jeff: %s %s %d nr_swapfiles:%d",__FILE__, __FUNCTION__, __LINE__,nr_swapfiles);
 
 	spin_lock(&swap_lock);
 	for (type = 0; type < nr_swapfiles; type++) {
 		struct swap_info_struct *sis = swap_info[type];
 
+		pr_err("Jeff: %s %s %d sis->flags:%ld sis->bdev->bd_dev:%d",__FILE__, __FUNCTION__, __LINE__,sis->flags,sis->bdev->bd_dev);
+	
 		if (!(sis->flags & SWP_WRITEOK))
 			continue;
 
 		if (device == sis->bdev->bd_dev) {
 			struct swap_extent *se = first_se(sis);
 
+			pr_err("Jeff: %s %s %d se->start_block:%lld offset: %lld",__FILE__, __FUNCTION__, __LINE__,se->start_block,offset);
+
 			if (se->start_block == offset) {
 				spin_unlock(&swap_lock);
+				pr_err("Jeff: %s %s %d type:%d",__FILE__, __FUNCTION__, __LINE__,type);
 				return type;
 			}
 		}
 	}
 	spin_unlock(&swap_lock);
+		pr_err("Jeff: %s %s %d Exit with erro-ENODEV",__FILE__, __FUNCTION__, __LINE__);
 	return -ENODEV;
 }
 

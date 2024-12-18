@@ -1255,7 +1255,7 @@ static void __init reset_memoryless_node_totalpages(struct pglist_data *pgdat)
 
 	pgdat->node_spanned_pages = 0;
 	pgdat->node_present_pages = 0;
-	pr_debug("On node %d totalpages: 0\n", pgdat->node_id);
+	pr_err("Jeff: On node %d totalpages: 0\n", pgdat->node_id);
 }
 
 static void __init calculate_node_totalpages(struct pglist_data *pgdat,
@@ -1264,6 +1264,8 @@ static void __init calculate_node_totalpages(struct pglist_data *pgdat,
 {
 	unsigned long realtotalpages = 0, totalpages = 0;
 	enum zone_type i;
+	
+	pr_err("Jeff: %s:%d %s node_start_pfn:%ld node_end_pfn:%ld",__FILE__,__LINE__,__FUNCTION__,node_start_pfn, node_end_pfn);
 
 	for (i = 0; i < MAX_NR_ZONES; i++) {
 		struct zone *zone = pgdat->node_zones + i;
@@ -1294,11 +1296,12 @@ static void __init calculate_node_totalpages(struct pglist_data *pgdat,
 
 		totalpages += spanned;
 		realtotalpages += real_size;
+		pr_err("Jeff: %s:%d %s zone_index:%d spanned:%ld absent:%ld real_size:%ld realtotalpages:%ld",__FILE__,__LINE__,__FUNCTION__,i,spanned, absent,real_size,realtotalpages);
 	}
 
 	pgdat->node_spanned_pages = totalpages;
 	pgdat->node_present_pages = realtotalpages;
-	pr_debug("On node %d totalpages: %lu\n", pgdat->node_id, realtotalpages);
+	pr_err("Jeff: On node %d totalpages: %lu\n", pgdat->node_id, realtotalpages);
 }
 
 static unsigned long __init calc_memmap_size(unsigned long spanned_pages,

@@ -1925,7 +1925,7 @@ int freeze_secondary_cpus(int primary)
 {
 	int cpu, error = 0;
 
-	pr_err("Jeff: freeze_secondary_cpus");
+	pr_err("Jeff: %s %s:%d",__FILE__,__FUNCTION__,__LINE__);
 
 	cpu_maps_update_begin();
 	if (primary == -1) {
@@ -1936,6 +1936,9 @@ int freeze_secondary_cpus(int primary)
 		if (!cpu_online(primary))
 			primary = cpumask_first(cpu_online_mask);
 	}
+
+	pr_err("Jeff: %s %s:%d",__FILE__,__FUNCTION__,__LINE__);
+
 
 	/*
 	 * We take down all of the non-boot CPUs in one shot to avoid races
@@ -1977,7 +1980,12 @@ int freeze_secondary_cpus(int primary)
 	 */
 	cpu_hotplug_disabled++;
 
+	pr_err("Jeff: %s %s:%d",__FILE__,__FUNCTION__,__LINE__);
+
 	cpu_maps_update_done();
+
+	pr_err("Jeff: %s %s:%d",__FILE__,__FUNCTION__,__LINE__);
+
 	return error;
 }
 

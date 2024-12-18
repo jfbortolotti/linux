@@ -2194,6 +2194,7 @@ static int init_header(struct swsusp_info *info)
 	info->pages = snapshot_get_image_size();
 	info->size = info->pages;
 	info->size <<= PAGE_SHIFT;
+	pr_err("Jeff: %s:%d %s num_physpages:%ld image_pages:%ld pages:%ld size:%ld",__FILE__, __LINE__,__FUNCTION__, info->num_physpages, info->image_pages, info->pages, info->size);
 	return init_header_complete(info);
 }
 
@@ -2329,11 +2330,12 @@ static int check_header(struct swsusp_info *info)
 {
 	const char *reason;
 
+
 	reason = check_image_kernel(info);
 	if (!reason && info->num_physpages != get_num_physpages())
 		reason = "memory size";
 	if (reason) {
-		pr_err("Image mismatch: %s\n", reason);
+		pr_err("Image mismatch: %s num_physpages:%ld get_num_physpages: %ld\n", reason,info->num_physpages,get_num_physpages());
 		return -EPERM;
 	}
 	return 0;

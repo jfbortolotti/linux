@@ -464,36 +464,67 @@ static int resume_target_kernel(bool platform_mode)
 {
 	int error;
 
-	pr_err("Jeff: %s %s",__FILE__,__FUNCTION__);
+	pr_err("Jeff: %s %s:%d",__FILE__,__FUNCTION__,__LINE__);
 
 	error = dpm_suspend_end(PMSG_QUIESCE);
 	if (error) {
+		pr_err("Jeff: %s %s:%d",__FILE__,__FUNCTION__,__LINE__);
 		pr_err("Some devices failed to power down, aborting resume\n");
 		return error;
 	}
 
+	pr_err("Jeff: %s %s:%d",__FILE__,__FUNCTION__,__LINE__);
+
 	error = platform_pre_restore(platform_mode);
 	if (error)
 		goto Cleanup;
+	pr_err("Jeff: %s %s:%d",__FILE__,__FUNCTION__,__LINE__);
 
 	cpuidle_pause();
 
+	pr_err("Jeff: %s %s:%d",__FILE__,__FUNCTION__,__LINE__);
+
 	error = hibernate_resume_nonboot_cpu_disable();
+
+	pr_err("Jeff: %s %s:%d",__FILE__,__FUNCTION__,__LINE__);
+
 	if (error)
 		goto Enable_cpus;
+
+	pr_err("Jeff: %s %s:%d",__FILE__,__FUNCTION__,__LINE__);
 
 	local_irq_disable();
 	system_state = SYSTEM_SUSPEND;
 
+	pr_err("Jeff: %s %s:%d",__FILE__,__FUNCTION__,__LINE__);
+
 	error = syscore_suspend();
+
+	pr_err("Jeff: %s %s:%d",__FILE__,__FUNCTION__,__LINE__);
+
 	if (error)
 		goto Enable_irqs;
 
+	pr_err("Jeff: %s %s:%d",__FILE__,__FUNCTION__,__LINE__);
+
 	save_processor_state();
+
+	pr_err("Jeff: %s %s:%d",__FILE__,__FUNCTION__,__LINE__);
+
 	error = restore_highmem();
+
+	pr_err("Jeff: %s %s:%d",__FILE__,__FUNCTION__,__LINE__);
+	/*
+	msleep(2000);
+
+	panic("Jeff: Are we getting there ?");
+	*/
+
 	if (!error) {
+		pr_err("Jeff: %s %s:%d",__FILE__,__FUNCTION__,__LINE__);
 		error = swsusp_arch_resume();
-		/*
+		pr_err("Jeff: %s %s:%d",__FILE__,__FUNCTION__,__LINE__);
+	/*
 		 * The code below is only ever reached in case of a failure.
 		 * Otherwise, execution continues at the place where
 		 * swsusp_arch_suspend() was called.
@@ -503,6 +534,7 @@ static int resume_target_kernel(bool platform_mode)
 		 * This call to restore_highmem() reverts the changes made by
 		 * the previous one.
 		 */
+		pr_err("Jeff: %s %s:%d",__FILE__,__FUNCTION__,__LINE__);
 		restore_highmem();
 	}
 	/*
@@ -510,23 +542,32 @@ static int resume_target_kernel(bool platform_mode)
 	 * very tight, so we have to free it as soon as we can to avoid
 	 * subsequent failures.
 	 */
+	pr_err("Jeff: %s %s:%d",__FILE__,__FUNCTION__,__LINE__);
 	swsusp_free();
+	pr_err("Jeff: %s %s:%d",__FILE__,__FUNCTION__,__LINE__);
 	restore_processor_state();
+	pr_err("Jeff: %s %s:%d",__FILE__,__FUNCTION__,__LINE__);
 	touch_softlockup_watchdog();
+	pr_err("Jeff: %s %s:%d",__FILE__,__FUNCTION__,__LINE__);
 
 	syscore_resume();
+	pr_err("Jeff: %s %s:%d",__FILE__,__FUNCTION__,__LINE__);
 
  Enable_irqs:
 	system_state = SYSTEM_RUNNING;
 	local_irq_enable();
+	pr_err("Jeff: %s %s:%d",__FILE__,__FUNCTION__,__LINE__);
 
  Enable_cpus:
 	pm_sleep_enable_secondary_cpus();
+	pr_err("Jeff: %s %s:%d",__FILE__,__FUNCTION__,__LINE__);
 
  Cleanup:
 	platform_restore_cleanup(platform_mode);
+	pr_err("Jeff: %s %s:%d",__FILE__,__FUNCTION__,__LINE__);
 
 	dpm_resume_start(PMSG_RECOVER);
+	pr_err("Jeff: %s %s:%d",__FILE__,__FUNCTION__,__LINE__);
 
 	return error;
 }
@@ -543,25 +584,44 @@ int hibernation_restore(int platform_mode)
 {
 	int error;
 
-	pr_err("Jeff: %s %s",__FILE__,__FUNCTION__);
+	pr_err("Jeff: %s %s:%d",__FILE__,__FUNCTION__,__LINE__);
 
 	pm_prepare_console();
+
+	pr_err("Jeff: %s %s:%d",__FILE__,__FUNCTION__,__LINE__);
+
 	suspend_console();
+
+	pr_err("Jeff: %s %s:%d",__FILE__,__FUNCTION__,__LINE__);
+
 	pm_restrict_gfp_mask();
+
+	pr_err("Jeff: %s %s:%d",__FILE__,__FUNCTION__,__LINE__);
+
 	error = dpm_suspend_start(PMSG_QUIESCE);
 	if (!error) {
+		pr_err("Jeff: %s %s:%d",__FILE__,__FUNCTION__,__LINE__);
+
 		error = resume_target_kernel(platform_mode);
 		/*
 		 * The above should either succeed and jump to the new kernel,
 		 * or return with an error. Otherwise things are just
 		 * undefined, so let's be paranoid.
 		 */
+		pr_err("Jeff: %s %s:%d",__FILE__,__FUNCTION__,__LINE__);
 		BUG_ON(!error);
 	}
+
+	pr_err("Jeff: %s %s:%d",__FILE__,__FUNCTION__,__LINE__);
+
 	dpm_resume_end(PMSG_RECOVER);
+	pr_err("Jeff: %s %s:%d",__FILE__,__FUNCTION__,__LINE__);
 	pm_restore_gfp_mask();
+	pr_err("Jeff: %s %s:%d",__FILE__,__FUNCTION__,__LINE__);
 	resume_console();
+	pr_err("Jeff: %s %s:%d",__FILE__,__FUNCTION__,__LINE__);
 	pm_restore_console();
+	pr_err("Jeff: %s %s:%d",__FILE__,__FUNCTION__,__LINE__);
 	return error;
 }
 
@@ -750,6 +810,7 @@ int hibernate(void)
 	}
 
 	pr_info("hibernation entry\n");
+	
 	pm_prepare_console();
 	error = pm_notifier_call_chain_robust(PM_HIBERNATION_PREPARE, PM_POST_HIBERNATION);
 	if (error)
@@ -818,6 +879,7 @@ int hibernate(void)
  Unlock:
 	unlock_system_sleep(sleep_flags);
 	pr_info("hibernation exit\n");
+
 
 	return error;
 }

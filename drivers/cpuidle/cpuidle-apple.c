@@ -108,8 +108,8 @@ static struct cpuidle_driver apple_idle_driver = {
 			.flags			= 0,
 		},
 		[STATE_PWRDOWN] = {
-			.enter			= apple_enter_idle,
-			.enter_s2idle		= apple_enter_idle,
+			.enter			= apple_enter_wfi,
+			.enter_s2idle		= apple_enter_wfi,
 			.exit_latency		= 10,
 			.target_residency	= 10000,
 			.power_usage            = 0,
