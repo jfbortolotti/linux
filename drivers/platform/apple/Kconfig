@@ -29,6 +29,20 @@ config APPLE_SMC
 	  To compile this driver as a module, choose M here: the module will
 	  be called macsmc.
 
+config APPLE_SUSPEND
+	bool "Apple Silicon S2RAM support"
+	depends on ARCH_APPLE && SUSPEND
+	default ARCH_APPLE
+	help
+	  Registers platform_suspend_ops for Apple Silicon SoCs, enabling
+	  PM_SUSPEND_MEM ("deep" in /sys/power/mem_sleep).
+
+	  This provides the generic kernel plumbing; the Apple-specific
+	  low-level entry code (firmware/PMU call) must be added separately
+	  in apple_suspend_finish() before actual suspend will work.
+
+	  Say Y here if you have an Apple Silicon Mac.
+
 if APPLE_SMC
 
 config APPLE_SMC_RTKIT

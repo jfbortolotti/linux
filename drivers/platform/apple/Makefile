@@ -9,3 +9,4 @@ macsmc-rtkit-y				+= smc_rtkit.o
 
 obj-$(CONFIG_APPLE_SMC)			+= macsmc.o
 obj-$(CONFIG_APPLE_SMC_RTKIT)		+= macsmc-rtkit.o
+obj-$(CONFIG_APPLE_SUSPEND)		+= apple-suspend.o

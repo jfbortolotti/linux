@@ -423,10 +423,57 @@ static const struct of_device_id apple_mbox_of_match[] = {
 };
 MODULE_DEVICE_TABLE(of, apple_mbox_of_match);
 
+/*
+ * System sleep PM ops for deep suspend (PM_SUSPEND_MEM).
+ *
+ * After apple_rtkit_shutdown() the mailbox is left started (active=true,
+ * recv IRQ enabled) by apple_rtkit_reinit().  The suspend_noirq callback
+ * disables the recv IRQ so it cannot fire while the IOP is powered down.
+ *
+ * On resume the hardware IRQ-enable registers may have lost state (power
+ * domain was cut), so resume_noirq re-programs them and re-enables the
+ * recv IRQ before the RTKit client's resume callback calls apple_rtkit_wake().
+ * The mailbox is a DPM parent of its RTKit clients (device_link), so the
+ * noirq resume order guarantees this runs first.
+ */
+static int __maybe_unused apple_mbox_suspend_noirq(struct device *dev)
+{
+	struct apple_mbox *mbox = platform_get_drvdata(to_platform_device(dev));
+
+	if (!mbox->active)
+		return 0;
+
+	mbox->active = false;
+	disable_irq(mbox->irq_recv_not_empty);
+	return 0;
+}
+
+static int __maybe_unused apple_mbox_resume_noirq(struct device *dev)
+{
+	struct apple_mbox *mbox = platform_get_drvdata(to_platform_device(dev));
+
+	/* Re-program hardware IRQ controls in case they lost state. */
+	if (mbox->hw->has_irq_controls) {
+		writel_relaxed(mbox->hw->irq_bit_recv_not_empty |
+			       mbox->hw->irq_bit_send_empty,
+			       mbox->regs + mbox->hw->irq_enable);
+	}
+
+	enable_irq(mbox->irq_recv_not_empty);
+	mbox->active = true;
+	return 0;
+}
+
+static const struct dev_pm_ops apple_mbox_pm_ops = {
+	SET_NOIRQ_SYSTEM_SLEEP_PM_OPS(apple_mbox_suspend_noirq,
+				      apple_mbox_resume_noirq)
+};
+
 static struct platform_driver apple_mbox_driver = {
 	.driver = {
 		.name = "apple-mailbox",
 		.of_match_table = apple_mbox_of_match,
+		.pm = pm_sleep_ptr(&apple_mbox_pm_ops),
 	},
 	.probe = apple_mbox_probe,
 };
