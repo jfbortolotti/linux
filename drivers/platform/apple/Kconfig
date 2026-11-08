@@ -43,6 +43,21 @@ config APPLE_SUSPEND
 
 	  Say Y here if you have an Apple Silicon Mac.
 
+config APPLE_SUSPEND_LEVEL4
+	bool "Experimental power-gated CPU sleep (Level 4)"
+	depends on APPLE_SUSPEND
+	default n
+	help
+	  Experimental, T8103 only. Sets ACC_OVRD.DEEP_SLEEP and the deep WFI
+	  mode of CYC_OVRD so that the boot CPU is power-gated by WFI, then
+	  relies on a wake event (SMC power button, RTC alarm, or a PMGR
+	  cpu-start write from another CPU through debugfs apple_l4/run) to
+	  restart it through RVBAR. RVBAR is locked to m1n1, so this needs an
+	  m1n1 that forwards the reset to cpu_resume(); without it a wake
+	  reboots into m1n1. Armed only with apple_suspend_l4.enable=1.
+
+	  If unsure, say N.
+
 if APPLE_SMC
 
 config APPLE_SMC_RTKIT

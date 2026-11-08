@@ -14,6 +14,7 @@
 #include <linux/platform_device.h>
 #include <linux/suspend.h>
 #include <asm/suspend.h>
+#include "apple-suspend-l4.h"
 
 /*
  * Low-level S2RAM finisher.  Called by cpu_suspend() after all CPU state
@@ -46,6 +47,10 @@ static int apple_suspend_enter(suspend_state_t state)
 	 * cpu_suspend() saves all CPU state and calls apple_suspend_finish.
 	 * On wakeup it restores that state and returns 0 here.
 	 */
+	/* Experimental power-gated (Level 4) path, off unless explicitly armed */
+	if (apple_l4_enabled())
+		return apple_l4_suspend();
+
 	return cpu_suspend(0, apple_suspend_finish);
 }
 
