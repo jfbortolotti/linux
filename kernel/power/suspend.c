@@ -82,6 +82,7 @@ void s2idle_set_ops(const struct platform_s2idle_ops *ops)
 	s2idle_ops = ops;
 	unlock_system_sleep(sleep_flags);
 }
+EXPORT_SYMBOL_GPL(s2idle_set_ops); /* experimental: apple-sleep module */
 
 static void s2idle_begin(void)
 {

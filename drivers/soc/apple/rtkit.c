@@ -789,6 +789,16 @@ static int apple_rtkit_set_ap_power_state(struct apple_rtkit *rtk,
 	return 0;
 }
 
+/*
+ * Experimental (apple-sleep): set only the AP power state seen by the
+ * co-processor, as macOS does with the SMC (0x201 IDLE) right before sleep.
+ */
+int apple_rtkit_set_ap_power(struct apple_rtkit *rtk, unsigned int state)
+{
+	return apple_rtkit_set_ap_power_state(rtk, state);
+}
+EXPORT_SYMBOL_GPL(apple_rtkit_set_ap_power);
+
 static int apple_rtkit_set_iop_power_state(struct apple_rtkit *rtk,
 					   unsigned int state)
 {

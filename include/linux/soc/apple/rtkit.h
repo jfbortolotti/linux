@@ -145,6 +145,11 @@ int apple_rtkit_poweroff(struct apple_rtkit *rtk);
 int apple_rtkit_idle(struct apple_rtkit *rtk);
 
 /*
+ * Experimental: set the AP power state only (e.g. 0x201 IDLE, 0x20 ON)
+ */
+int apple_rtkit_set_ap_power(struct apple_rtkit *rtk, unsigned int state);
+
+/*
  * Checks if RTKit is running and ready to handle messages.
  */
 bool apple_rtkit_is_running(struct apple_rtkit *rtk);

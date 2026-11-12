@@ -919,6 +919,30 @@ static int aic_init_cpu(unsigned int cpu)
 	return 0;
 }
 
+/*
+ * EXPERIMENTAL (cpuidle-apple s2idle_acc=2): the calling CPU came back from a power-gated WFI
+ * through its reset vector, so its per-CPU FIQ sources are back at their reset values. Mask
+ * them again as aic_init_cpu() does, but keep pending fast IPIs: one may be what woke us.
+ */
+void apple_aic_cpu_reset_resume(void); /* called from cpuidle-apple.c */
+void apple_aic_cpu_reset_resume(void)
+{
+	sysreg_clear_set(cntp_ctl_el0, 0, ARCH_TIMER_CTRL_IT_MASK);
+	sysreg_clear_set(cntv_ctl_el0, 0, ARCH_TIMER_CTRL_IT_MASK);
+	if (is_kernel_in_hyp_mode()) {
+		sysreg_clear_set_s(SYS_IMP_APL_VM_TMR_FIQ_ENA_EL2,
+				   VM_TMR_FIQ_ENABLE_V | VM_TMR_FIQ_ENABLE_P, 0);
+		sysreg_clear_set_s(SYS_ICH_HCR_EL2, ICH_HCR_EL2_En, 0);
+	}
+	sysreg_clear_set_s(SYS_IMP_APL_PMCR0_EL1, PMCR0_IMODE | PMCR0_IACT,
+			   FIELD_PREP(PMCR0_IMODE, PMCR0_IMODE_OFF));
+	if (static_branch_likely(&use_fast_ipi))
+		sysreg_clear_set_s(SYS_IMP_APL_UPMCR0_EL1, UPMCR0_IMODE,
+				   FIELD_PREP(UPMCR0_IMODE, UPMCR0_IMODE_OFF));
+	isb();
+	__this_cpu_write(aic_fiq_unmasked, 0);
+}
+
 static struct gic_kvm_info vgic_info __initdata = {
 	.type			= GIC_V3,
 	.no_maint_irq_mask	= true,

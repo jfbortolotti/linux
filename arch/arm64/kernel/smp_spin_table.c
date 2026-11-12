@@ -17,6 +17,7 @@
 #include <asm/cputype.h>
 #include <asm/io.h>
 #include <asm/smp_plat.h>
+#include <asm/spin_table.h>
 
 extern void secondary_holding_pen(void);
 volatile unsigned long __section(".mmuoff.data.read")
@@ -104,12 +105,29 @@ static int smp_spin_table_cpu_prepare(unsigned int cpu)
 	return 0;
 }
 
+static const struct spin_table_hotplug_ops *hotplug_ops;
+static bool cpu_powered_off[NR_CPUS];
+
+void smp_spin_table_set_hotplug_ops(const struct spin_table_hotplug_ops *ops)
+{
+	hotplug_ops = ops;
+}
+
 static int smp_spin_table_cpu_boot(unsigned int cpu)
 {
 	/*
 	 * Update the pen release flag.
 	 */
 	write_pen_release(cpu_logical_map(cpu));
+
+	/* a core taken down through the hotplug ops is off: power it on, it comes back to the pen */
+	if (READ_ONCE(cpu_powered_off[cpu]) && hotplug_ops) {
+		int ret = hotplug_ops->cpu_boot(cpu);
+
+		if (ret)
+			return ret;
+		WRITE_ONCE(cpu_powered_off[cpu], false);
+	}
 
 	/*
 	 * Send an event, causing the secondaries to read pen_release.
@@ -119,9 +137,42 @@ static int smp_spin_table_cpu_boot(unsigned int cpu)
 	return 0;
 }
 
+#ifdef CONFIG_HOTPLUG_CPU
+static bool smp_spin_table_cpu_can_disable(unsigned int cpu)
+{
+	return hotplug_ops != NULL;
+}
+
+static int smp_spin_table_cpu_disable(unsigned int cpu)
+{
+	return hotplug_ops ? 0 : -EOPNOTSUPP;
+}
+
+static void smp_spin_table_cpu_die(unsigned int cpu)
+{
+	/* the pen still holds this CPU's MPIDR from its last boot: a restart must wait there */
+	write_pen_release(INVALID_HWID);
+	WRITE_ONCE(cpu_powered_off[cpu], true);
+	dcache_clean_inval_poc((unsigned long)&cpu_powered_off[cpu],
+			       (unsigned long)&cpu_powered_off[cpu] + sizeof(bool));
+	hotplug_ops->cpu_die(cpu, __pa_symbol(secondary_holding_pen));
+}
+
+static int smp_spin_table_cpu_kill(unsigned int cpu)
+{
+	return hotplug_ops->cpu_kill(cpu);
+}
+#endif
+
 const struct cpu_operations smp_spin_table_ops = {
 	.name		= "spin-table",
 	.cpu_init	= smp_spin_table_cpu_init,
 	.cpu_prepare	= smp_spin_table_cpu_prepare,
 	.cpu_boot	= smp_spin_table_cpu_boot,
+#ifdef CONFIG_HOTPLUG_CPU
+	.cpu_can_disable = smp_spin_table_cpu_can_disable,
+	.cpu_disable	= smp_spin_table_cpu_disable,
+	.cpu_die	= smp_spin_table_cpu_die,
+	.cpu_kill	= smp_spin_table_cpu_kill,
+#endif
 };

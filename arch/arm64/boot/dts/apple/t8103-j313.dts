@@ -22,6 +22,12 @@
 		sep = &sep;
 	};
 
+	/* EXPERIMENTAL: drivers/soc/apple/apple-sleep.c (lid switch level on aop-gpio 22) */
+	apple-sleep {
+		compatible = "apple,t8103-sleep";
+		lid-gpios = <&pinctrl_aop 22 GPIO_ACTIVE_HIGH>;
+	};
+
 	led-controller {
 		compatible = "pwm-leds";
 		led-0 {

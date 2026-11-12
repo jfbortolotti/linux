@@ -122,6 +122,19 @@ config APPLE_PMP
 
 	  Say 'y' here if you have an Apple SoC.
 
+config APPLE_SLEEP
+	tristate "EXPERIMENTAL Apple T8103 suspend-to-idle extras"
+	depends on ARCH_APPLE && SUSPEND && MFD_MACSMC && APPLE_RTKIT
+	depends on GPIOLIB
+	help
+	  Experimental port of the m1n1 Level 3 battery test: dumps the PMGR
+	  power states left on in s2idle, optionally turns more of them off
+	  (macOS sleep tables, T8103 only), runs the SMC sleep handshake and
+	  wakes on lid open through aop-gpio. Needs the "apple,t8103-sleep"
+	  DT node. Module name apple_sleep, see its parameters.
+
+	  If unsure, say N.
+
 endmenu
 
 endif
