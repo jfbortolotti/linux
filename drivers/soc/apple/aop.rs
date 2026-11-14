@@ -81,6 +81,8 @@ const AFK_OPC_INIT_UNK: u64 = 0x8c;
 const AFK_OPC_SEND: u64 = 0xa2;
 const AFK_OPC_START_ACK: u64 = 0x86;
 const AFK_OPC_SHUTDOWN_ACK: u64 = 0xc1;
+/// Ack of the 0xa4 macOS sends every AFK endpoint before sleep (traces 10/11), sent by apple-sleep.
+const AFK_OPC_SUSPEND_ACK: u64 = 0x87;
 const AFK_OPC_RECV: u64 = 0x85;
 const AFK_MSG_GET_BUF_ACK: u64 = 0xa1 << 48;
 const AFK_MSG_INIT: u64 = AFK_OPC_INIT << 48;
@@ -276,6 +278,9 @@ impl AFKEndpoint {
             }
             AFK_OPC_SHUTDOWN_ACK => {
                 client.shutdown_complete();
+            }
+            AFK_OPC_SUSPEND_ACK => {
+                dev_info!(client.dev, "AFK endpoint {:#x} suspend ack {:#x}\n", self.index, msg);
             }
             _ => dev_err!(
                 client.dev,

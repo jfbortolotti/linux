@@ -25,5 +25,6 @@ obj-$(CONFIG_APPLE_AOP) += aop.o
 obj-$(CONFIG_APPLE_SEP) += sep.o
 
 obj-$(CONFIG_APPLE_PMP) += pmp.o
+obj-$(CONFIG_APPLE_PMP_T8103) += pmp-t8103.o
 
 obj-$(CONFIG_APPLE_SLEEP) += apple-sleep.o

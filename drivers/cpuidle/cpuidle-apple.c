@@ -399,16 +399,17 @@ static __cpuidle int apple_enter_s2idle(struct cpuidle_device *dev,
  * sequence of m1n1's smp_start_cpu(); it then comes back through its RVBAR (m1n1), which sends
  * it to the Linux holding pen through its per-CPU handoff slot.
  *   cpuidle_apple.cpuhp=0 (command line): don't register the hotplug ops.
- *   cpuidle_apple.cluster_deep=1: the last core of a cluster also sets ACC_OVRD.DEEP_SLEEP,
+ *   cpuidle_apple.cluster_deep=1 (default): the last core of a cluster also sets ACC_OVRD.DEEP_SLEEP,
  *     as XNU does when it powers a cluster down (XNU then calls PMGR disableCPUCluster, not
  *     done here). Never for the boot CPU's cluster.
  */
 static bool cpuhp = true;
 module_param(cpuhp, bool, 0444);
 MODULE_PARM_DESC(cpuhp, "CPU hotplug through PMGR + m1n1 (boot-time only)");
-static bool cluster_deep;
+/* default on since 2026-11-14 (deep: P cluster PS 0x2100 in 361 us, resume fine) */
+static bool cluster_deep = true;
 module_param(cluster_deep, bool, 0644);
-MODULE_PARM_DESC(cluster_deep, "last core of a cluster going offline sets ACC_OVRD.DEEP_SLEEP");
+MODULE_PARM_DESC(cluster_deep, "last core of a cluster going offline sets ACC_OVRD.DEEP_SLEEP (default on)");
 static bool cpuhp_verbose = true;
 module_param(cpuhp_verbose, bool, 0644);
 MODULE_PARM_DESC(cpuhp_verbose, "log the PMGR power states at each CPU off/on");

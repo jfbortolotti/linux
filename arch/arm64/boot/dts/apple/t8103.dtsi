@@ -1277,6 +1277,60 @@
 			#mbox-cells = <0>;
 		};
 
+		pmp_dart: iommu@23b300000 {
+			compatible = "apple,t8103-dart";
+			reg = <0x2 0x3b300000 0x0 0x4000>;
+			#iommu-cells = <5>;
+			interrupt-parent = <&aic>;
+			interrupts = <AIC_IRQ 515 IRQ_TYPE_LEVEL_HIGH>;
+			power-domains = <&ps_pmp>;
+			status = "disabled";
+		};
+
+		pmp_mbox: mbox@23bc08000 {
+			compatible = "apple,t8103-asc-mailbox", "apple,asc-mailbox-v4";
+			reg = <0x2 0x3bc08000 0x0 0x4000>;
+			interrupt-parent = <&aic>;
+			interrupts = <AIC_IRQ 511 IRQ_TYPE_LEVEL_HIGH>,
+				<AIC_IRQ 512 IRQ_TYPE_LEVEL_HIGH>,
+				<AIC_IRQ 513 IRQ_TYPE_LEVEL_HIGH>,
+				<AIC_IRQ 514 IRQ_TYPE_LEVEL_HIGH>;
+			interrupt-names = "send-empty", "send-not-empty",
+				"recv-empty", "recv-not-empty";
+			#mbox-cells = <0>;
+			power-domains = <&ps_pmp>, <&ps_pms_sram>;
+			status = "disabled";
+		};
+
+		/*
+		 * Power Management Processor, t8103 (ep 0x20 v1) protocol. The DMA window stops below
+		 * 0xc0000000: the PIO windows (ADT pio-vm-base) are mapped from there.
+		 */
+		pmp: pmp@23bc00000 {
+			compatible = "apple,t8103-pmp";
+			reg = <0x2 0x3bc00000 0x0 0x4000>;
+			reg-names = "asc";
+			mboxes = <&pmp_mbox>;
+			iommus = <&pmp_dart 0 0x0 0x4000 0x0 0xbfffc000>;
+			power-domains = <&ps_pmp>;
+			/* ADT /arm-io/pmp reg[3..]: offsets from 0x200000000, 0 = unused slot */
+			apple,pio-ranges =
+				<0x00024000 0x4000>, <0x00064000 0x4000>, <0x000a4000 0x4000>,
+				<0x000e4000 0x4000>, <0x00158000 0x4000>, <0x00204000 0x4000>,
+				<0x00244000 0x4000>, <0x00284000 0x4000>, <0x002c4000 0x4000>,
+				<0 0>, <0 0>, <0 0>, <0 0>, <0 0>,
+				<0x04d10000 0x4000>, <0x10058000 0x4000>, <0x10158000 0x4000>,
+				<0x10258000 0x4000>, <0x10358000 0x4000>, <0x10e20000 0x60000>,
+				<0x10e48000 0x4000>, <0x11058000 0x4000>, <0x11158000 0x4000>,
+				<0x11258000 0x4000>, <0x11358000 0x4000>, <0x11e20000 0x60000>,
+				<0x11e48000 0x4000>, <0x3d100000 0x14000>, <0x3d128000 0x30000>,
+				<0x3d0d8000 0x4000>, <0x6b90c000 0x4000>, <0 0>,
+				<0x00170000 0x4000>, <0 0>, <0x3c100000 0x4000>,
+				<0x04e20000 0x4000>, <0x11ee0000 0x8000>, <0x11ee8000 0x8000>,
+				<0x11ef0000 0x8000>, <0x10ee0000 0x8000>, <0x04d80000 0x8000>;
+			status = "disabled";
+		};
+
 		pinctrl_smc: pinctrl@23e820000 {
 			compatible = "apple,t8103-pinctrl", "apple,pinctrl";
 			reg = <0x2 0x3e820000 0x0 0x4000>;

@@ -199,3 +199,64 @@
 &isp {
 	apple,platform-id = <1>;
 };
+
+/*
+ * PMP: booted by Linux (iBoot leaves it pre-loaded and stopped). The DRAM energy model is the ADT
+ * iop-pmp-nub energy-model-dram-configs (4 x 128 bytes: capacity GB, vendor id, ...); the driver
+ * hands the PMP the entry for this machine, as macOS does. Its domains must stay up across suspend.
+ */
+&ps_pmp {
+	apple,always-on;
+};
+
+&ps_pms_sram {
+	apple,always-on;
+};
+
+&pmp_dart {
+	status = "okay";
+};
+
+&pmp_mbox {
+	status = "okay";
+};
+
+&pmp {
+	apple,dram-capacity = <8>;
+	apple,dram-vendor-id = <6>;
+	apple,energy-model-dram-configs = [
+		08 00 00 00 06 00 00 00 cc 4c 1a 00 99 99 00 00
+		66 66 07 00 00 00 01 00 33 b3 08 00 00 80 58 00
+		66 e6 54 00 33 33 0b 00 cc cc 00 00 66 66 17 00
+		66 66 23 00 00 80 01 00 99 99 0f 00 66 e6 01 00
+		33 b3 11 00 cc 4c b4 00 99 19 aa 00 00 80 14 00
+		cc cc 00 00 cc cc 2e 00 cc cc 25 00 00 80 01 00
+		33 33 12 00 66 e6 01 00 00 00 14 00 cc 4c f2 00
+		33 33 d2 00 33 b3 16 00 cc cc 00 00 33 33 44 00
+		08 00 00 00 ff 00 00 00 cc 4c 0f 00 cc 4c 00 00
+		66 e6 05 00 00 00 01 00 33 33 07 00 66 66 6a 00
+		66 e6 47 00 33 b3 09 00 00 80 00 00 66 66 17 00
+		99 99 16 00 00 80 00 00 cc 4c 0c 00 cc cc 01 00
+		00 80 0e 00 99 19 bd 00 33 b3 9b 00 33 33 10 00
+		00 80 00 00 cc cc 2e 00 99 19 1a 00 00 80 00 00
+		cc 4c 0f 00 cc cc 01 00 00 00 12 00 33 b3 0e 01
+		33 33 cc 00 66 66 13 00 00 80 00 00 33 33 44 00
+		10 00 00 00 06 00 00 00 cc cc 26 00 33 33 01 00
+		cc cc 0e 00 33 b3 01 00 33 33 10 00 66 e6 6d 00
+		00 80 66 00 cc 4c 16 00 33 b3 01 00 66 66 17 00
+		33 33 35 00 cc cc 02 00 00 80 1c 00 00 80 03 00
+		00 80 1e 00 cc cc e1 00 cc 4c ce 00 00 80 25 00
+		33 b3 01 00 cc cc 2e 00 00 80 39 00 cc cc 02 00
+		cc 4c 20 00 00 80 03 00 cc 4c 22 00 99 99 25 01
+		99 99 fe 00 cc 4c 29 00 33 b3 01 00 33 33 44 00
+		10 00 00 00 ff 00 00 00 66 e6 21 00 99 19 01 00
+		66 e6 10 00 66 e6 01 00 33 33 13 00 00 00 75 00
+		cc 4c 63 00 99 19 1c 00 cc 4c 01 00 66 66 17 00
+		cc 4c 2e 00 cc cc 01 00 33 b3 1c 00 cc 4c 03 00
+		99 99 1f 00 33 b3 f8 00 cc 4c d4 00 cc 4c 28 00
+		cc 4c 01 00 cc cc 2e 00 33 b3 34 00 cc cc 01 00
+		cc 4c 22 00 cc 4c 03 00 99 99 25 00 99 99 52 01
+		00 00 14 01 00 00 2e 00 cc 4c 01 00 33 33 44 00
+	];
+	status = "okay";
+};
