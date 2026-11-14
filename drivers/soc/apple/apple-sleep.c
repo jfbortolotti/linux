@@ -47,6 +47,7 @@
 #include <linux/bits.h>
 #include <linux/ctype.h>
 #include <linux/delay.h>
+#include <linux/hex.h>
 #include <clocksource/arm_arch_timer.h>
 #include <linux/gpio/consumer.h>
 #include <linux/interrupt.h>
@@ -1189,6 +1190,34 @@ static const struct kernel_param_ops smc_mbse_ops = {
 };
 module_param_cb(smc_mbse, &smc_mbse_ops, NULL, 0200);
 MODULE_PARM_DESC(smc_mbse, "awake: write the SMC key MBSE (4 chars, e.g. slpw)");
+
+/*
+ * smc_gpio=<pin>=<0|1> (2026-11-14, Wi-Fi power test): drive an SMC GPIO behind gpiolib's back,
+ * as gpio-macsmc does (key gPxx, CMD_OUTPUT | value). Pin 13 is the Wi-Fi/BT PWREN, claimed by
+ * pcie-apple: "13=0" after removing 01:00.0 and 01:00.1 cuts the chip power for a meter run
+ * (Wi-Fi then stays dead until reboot; "13=1" alone does not bring it back).
+ */
+static int smc_gpio_set(const char *val, const struct kernel_param *kp)
+{
+	unsigned int pin, v;
+	smc_key key;
+	int ret;
+
+	if (!as.smc)
+		return -ENODEV;
+	if (sscanf(val, "%u=%u", &pin, &v) != 2 || pin > 0xff || v > 1)
+		return -EINVAL;
+	key = (SMC_KEY(gP00) & 0xffff0000) | hex_asc_hi(pin) << 8 | hex_asc_lo(pin);
+	ret = apple_smc_write_u32(as.smc, key, (1u << 24) | v);
+	pr_info("awake: SMC GPIO %u (%p4ch) = %u: %d\n", pin, &key, v, ret);
+	return ret;
+}
+
+static const struct kernel_param_ops smc_gpio_ops = {
+	.set = smc_gpio_set,
+};
+module_param_cb(smc_gpio, &smc_gpio_ops, NULL, 0200);
+MODULE_PARM_DESC(smc_gpio, "awake: drive an SMC GPIO, <pin>=<0|1> (13 = Wi-Fi/BT PWREN)");
 
 /* awake helpers for the wake-path tests (2026-11-14) */
 static int smc_wktp_set(const char *val, const struct kernel_param *kp)

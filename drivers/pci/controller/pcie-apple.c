@@ -30,12 +30,39 @@
 #include <linux/msi.h>
 #include <linux/of_irq.h>
 #include <linux/pci-ecam.h>
+#include <linux/suspend.h>
+#include <linux/workqueue.h>
 
 #include "pci-host-common.h"
 
 static int link_up_timeout = 500;
 module_param(link_up_timeout, int, 0644);
 MODULE_PARM_DESC(link_up_timeout, "PCIe link training timeout in milliseconds");
+
+/*
+ * Experimental (apple-s2idle, 2026-11-14): power off the devices of every port with a PWREN GPIO
+ * (MacBook Air M1: the BCM4378 Wi-Fi/BT, SMC GPIO 13) across system suspend. The drivers cannot
+ * survive a power loss in place (hci_bcm4377 resume only un-quiesces), so the devices are removed
+ * before the suspend and the port is rescanned after it: both drivers probe as at boot.
+ * Measured in deep + PMP + AOP sleep: chip powered 34.5 mA, chip unpowered 21.4 mA.
+ *
+ * Removing or adding a Bluetooth device (un)registers a PM notifier, which takes the PM notifier
+ * chain lock: done from our own notifier it deadlocks (2026-11-14 hang). So the notifier only
+ * queues the removal; the host's .prepare (chain done, tasks frozen) waits for it; .suspend_noirq
+ * cuts PERST#/PWREN; .resume_noirq powers up and trains the link; .complete (or PM_POST_SUSPEND
+ * after an abort) queues the rescan. Both power steps must be noirq: the root port's config
+ * space is unreachable while PERST# is held, and the PCI core restores it in its own
+ * resume_noirq (D3hot -> D0 "device inaccessible" when the power-up was in .resume). The host
+ * runs after its children at suspend_noirq and before them at resume_noirq.
+ */
+static bool power_off_suspend = true;
+module_param(power_off_suspend, bool, 0644);
+MODULE_PARM_DESC(power_off_suspend, "power off ports with a PWREN GPIO (Wi-Fi/BT) across system suspend (default N until verified)");
+
+/* bisecting aid: assert PERST# before cutting PWREN (the working 21.4 mA test left it deasserted) */
+static bool power_off_perst = true;
+module_param(power_off_perst, bool, 0644);
+MODULE_PARM_DESC(power_off_perst, "power_off_suspend: assert PERST# before cutting PWREN (default Y)");
 
 /* T8103 (original M1) and related SoCs */
 #define CORE_RC_PHYIF_CTL		0x00024
@@ -194,6 +221,7 @@ struct apple_pcie {
 	struct completion	event;
 	struct irq_fwspec	fwspec;
 	u32			nvecs;
+	struct notifier_block	pm_nb;
 };
 
 struct apple_pcie_port {
@@ -207,6 +235,16 @@ struct apple_pcie_port {
 	unsigned long		*sid_map;
 	int			sid_map_sz;
 	int			idx;
+#define MAX_AUX_PERST 3
+	struct gpio_desc	*reset;
+	struct gpio_desc	*aux_reset[MAX_AUX_PERST];
+	u32			num_aux_resets;
+	struct gpio_desc	*pwren;
+	bool			armed;		/* removal queued this suspend */
+	bool			removed;	/* devices gone, rescan owed */
+	bool			powered_off;
+	struct work_struct	remove_work;
+	struct work_struct	rescan_work;
 };
 
 static void rmw_set(u32 set, void __iomem *addr)
@@ -558,7 +596,6 @@ static int apple_pcie_setup_link(struct apple_pcie *pcie,
 				 struct apple_pcie_port *port,
 				 struct device_node *np)
 {
-#define MAX_AUX_PERST 3
 	struct gpio_desc *aux_reset[MAX_AUX_PERST] = { NULL };
 	u32 num_aux_resets = 0;
 	struct gpio_desc *reset, *pwren = NULL;
@@ -640,8 +677,248 @@ static int apple_pcie_setup_link(struct apple_pcie *pcie,
 		return ret;
 	}
 
+	port->reset = reset;
+	for (u32 idx = 0; idx < num_aux_resets; idx++)
+		port->aux_reset[idx] = aux_reset[idx];
+	port->num_aux_resets = num_aux_resets;
+	port->pwren = pwren;
 	return 0;
 }
+
+static void apple_pcie_port_set_perst(struct apple_pcie_port *port, bool assert)
+{
+	if (assert)
+		rmw_clear(PORT_PERST_OFF, port->base + port->pcie->hw->port_perst);
+	gpiod_set_value_cansleep(port->reset, assert);
+	for (u32 idx = 0; idx < port->num_aux_resets; idx++)
+		gpiod_set_value_cansleep(port->aux_reset[idx], assert);
+	if (!assert)
+		rmw_set(PORT_PERST_OFF, port->base + port->pcie->hw->port_perst);
+}
+
+static struct pci_dev *apple_pcie_root_port(struct apple_pcie *pcie, struct apple_pcie_port *port)
+{
+	struct pci_host_bridge *bridge = pci_host_bridge_from_priv(pcie);
+
+	return bridge->bus ? pci_get_slot(bridge->bus, PCI_DEVFN(port->idx, 0)) : NULL;
+}
+
+static struct apple_pcie *apple_pcie_lookup(struct device *dev);
+
+static void apple_pcie_port_remove_work(struct work_struct *work)
+{
+	struct apple_pcie_port *port = container_of(work, struct apple_pcie_port, remove_work);
+	struct pci_dev *rp = apple_pcie_root_port(port->pcie, port);
+	struct pci_dev *dev, *tmp;
+
+	if (!rp)
+		return;
+	pci_lock_rescan_remove();
+	if (rp->subordinate)
+		list_for_each_entry_safe_reverse(dev, tmp, &rp->subordinate->devices, bus_list)
+			pci_stop_and_remove_bus_device(dev);
+	pci_unlock_rescan_remove();
+	pci_dev_put(rp);
+	port->removed = true;
+	dev_info(port->pcie->dev, "%pOF: devices removed for suspend\n", port->np);
+}
+
+/* host .suspend_noirq: the devices are gone and the root port is suspended: reset, unpower */
+static void apple_pcie_port_power_off(struct apple_pcie *pcie, struct apple_pcie_port *port)
+{
+	if (power_off_perst) {
+		dev_info(pcie->dev, "%pOF: asserting PERST#\n", port->np);
+		apple_pcie_port_set_perst(port, true);
+		usleep_range(100, 200);
+	}
+	dev_info(pcie->dev, "%pOF: PWREN off\n", port->np);
+	gpiod_set_value_cansleep(port->pwren, 0);
+	port->powered_off = true;
+	dev_info(pcie->dev, "%pOF: powered off for suspend\n", port->np);
+}
+
+/* host .resume_noirq: power up and train the link (polled, device IRQs are off); rescan later */
+static void apple_pcie_port_power_on(struct apple_pcie *pcie, struct apple_pcie_port *port)
+{
+	u32 stat;
+	int ret;
+
+	port->powered_off = false;
+	dev_info(pcie->dev, "%pOF: PWREN on\n", port->np);
+	gpiod_set_value_cansleep(port->pwren, 1);
+	/* Tpvperl: 100 ms from power stable to PERST# deassertion; the refclk stayed on */
+	msleep(100);
+	dev_info(pcie->dev, "%pOF: releasing PERST#\n", port->np);
+	apple_pcie_port_set_perst(port, false);
+	/* 100 ms after PERST# deassertion (PCIe r5.0, 6.6.1) */
+	msleep(100);
+	dev_info(pcie->dev, "%pOF: waiting for port ready (status %#x, linksts %#x)\n", port->np,
+		 readl_relaxed(port->base + PORT_STATUS), readl_relaxed(port->base + PORT_LINKSTS));
+	ret = readl_relaxed_poll_timeout(port->base + PORT_STATUS, stat,
+					 stat & PORT_STATUS_READY, 100, 250000);
+	if (ret < 0) {
+		dev_err(pcie->dev, "%pOF: port ready wait timeout after resume\n", port->np);
+		return;
+	}
+
+	if (!(readl_relaxed(port->base + PORT_LINKSTS) & PORT_LINKSTS_UP)) {
+		dev_info(pcie->dev, "%pOF: starting link training\n", port->np);
+		writel_relaxed(PORT_LTSSMCTL_START, port->base + PORT_LTSSMCTL);
+		ret = readl_relaxed_poll_timeout(port->base + PORT_LINKSTS, stat,
+						 stat & PORT_LINKSTS_UP, 100,
+						 link_up_timeout * USEC_PER_MSEC);
+		if (ret < 0) {
+			dev_warn(pcie->dev, "%pOF: link didn't come up after resume\n", port->np);
+			return;
+		}
+	}
+	dev_info(pcie->dev, "%pOF: powered on after suspend, link up\n", port->np);
+}
+
+static void apple_pcie_port_rescan_work(struct work_struct *work)
+{
+	struct apple_pcie_port *port = container_of(work, struct apple_pcie_port, rescan_work);
+	struct pci_dev *rp;
+
+	flush_work(&port->remove_work);
+	if (!port->removed)
+		return;
+	if (port->powered_off)		/* suspend aborted between .suspend and .resume: cannot happen */
+		apple_pcie_port_power_on(port->pcie, port);
+	port->removed = false;
+	rp = apple_pcie_root_port(port->pcie, port);
+	if (!rp)
+		return;
+	pci_lock_rescan_remove();
+	if (rp->subordinate)
+		pci_rescan_bus(rp->subordinate);
+	pci_unlock_rescan_remove();
+	pci_dev_put(rp);
+	dev_info(port->pcie->dev, "%pOF: rescanned after suspend\n", port->np);
+}
+
+static void apple_pcie_queue_rescans(struct apple_pcie *pcie)
+{
+	struct apple_pcie_port *port;
+
+	list_for_each_entry(port, &pcie->ports, entry) {
+		if (!port->armed)
+			continue;
+		port->armed = false;
+		queue_work(system_unbound_wq, &port->rescan_work);
+	}
+}
+
+/*
+ * power_cycle_test=off|on (awake bisecting aid, 2026-11-14): "off" removes the devices of every
+ * PWREN port and powers it off as at suspend, "on" powers up, trains the link and rescans.
+ * Both log every step, so a hang shows which one.
+ */
+static struct apple_pcie *apple_pcie_test_host;
+
+static int power_cycle_test_set(const char *val, const struct kernel_param *kp)
+{
+	struct apple_pcie *pcie = apple_pcie_test_host;
+	struct apple_pcie_port *port;
+	bool off;
+
+	if (!pcie)
+		return -ENODEV;
+	if (sysfs_streq(val, "off"))
+		off = true;
+	else if (sysfs_streq(val, "on"))
+		off = false;
+	else
+		return -EINVAL;
+	list_for_each_entry(port, &pcie->ports, entry) {
+		if (!port->pwren || !port->reset)
+			continue;
+		if (off && !port->powered_off) {
+			apple_pcie_port_remove_work(&port->remove_work);
+			apple_pcie_port_power_off(pcie, port);
+		} else if (!off && port->powered_off) {
+			apple_pcie_port_power_on(pcie, port);
+			apple_pcie_port_rescan_work(&port->rescan_work);
+		}
+	}
+	return 0;
+}
+
+static const struct kernel_param_ops power_cycle_test_ops = {
+	.set = power_cycle_test_set,
+};
+module_param_cb(power_cycle_test, &power_cycle_test_ops, NULL, 0200);
+MODULE_PARM_DESC(power_cycle_test, "awake test: off = remove + power off the PWREN ports, on = power on + rescan");
+
+static int apple_pcie_pm_notify(struct notifier_block *nb, unsigned long action, void *data)
+{
+	struct apple_pcie *pcie = container_of(nb, struct apple_pcie, pm_nb);
+	struct apple_pcie_port *port;
+
+	switch (action) {
+	case PM_SUSPEND_PREPARE:
+		if (!power_off_suspend)
+			break;
+		list_for_each_entry(port, &pcie->ports, entry) {
+			if (!port->pwren || !port->reset)
+				continue;
+			port->armed = true;
+			/* never wait here: the removal needs this chain's lock */
+			queue_work(system_unbound_wq, &port->remove_work);
+		}
+		break;
+	case PM_POST_SUSPEND:
+		/* normally done by .complete; covers a suspend aborted before .prepare */
+		apple_pcie_queue_rescans(pcie);
+		break;
+	}
+	return NOTIFY_OK;
+}
+
+static int apple_pcie_pm_prepare(struct device *dev)
+{
+	struct apple_pcie *pcie = apple_pcie_lookup(dev);
+	struct apple_pcie_port *port;
+
+	list_for_each_entry(port, &pcie->ports, entry)
+		if (port->armed)
+			flush_work(&port->remove_work);
+	return 0;
+}
+
+static int apple_pcie_pm_suspend_noirq(struct device *dev)
+{
+	struct apple_pcie *pcie = apple_pcie_lookup(dev);
+	struct apple_pcie_port *port;
+
+	list_for_each_entry(port, &pcie->ports, entry)
+		if (port->removed)
+			apple_pcie_port_power_off(pcie, port);
+	return 0;
+}
+
+static int apple_pcie_pm_resume_noirq(struct device *dev)
+{
+	struct apple_pcie *pcie = apple_pcie_lookup(dev);
+	struct apple_pcie_port *port;
+
+	list_for_each_entry(port, &pcie->ports, entry)
+		if (port->powered_off)
+			apple_pcie_port_power_on(pcie, port);
+	return 0;
+}
+
+static void apple_pcie_pm_complete(struct device *dev)
+{
+	apple_pcie_queue_rescans(apple_pcie_lookup(dev));
+}
+
+static const struct dev_pm_ops apple_pcie_pm_ops = {
+	.prepare	= apple_pcie_pm_prepare,
+	.suspend_noirq	= apple_pcie_pm_suspend_noirq,
+	.resume_noirq	= apple_pcie_pm_resume_noirq,
+	.complete	= apple_pcie_pm_complete,
+};
 
 static int apple_pcie_setup_port(struct apple_pcie *pcie,
 				 struct device_node *np)
@@ -669,6 +946,8 @@ static int apple_pcie_setup_port(struct apple_pcie *pcie,
 	port->idx = idx >> 11;
 	port->pcie = pcie;
 	port->np = np;
+	INIT_WORK(&port->remove_work, apple_pcie_port_remove_work);
+	INIT_WORK(&port->rescan_work, apple_pcie_port_rescan_work);
 
 	raw_spin_lock_init(&port->lock);
 
@@ -688,7 +967,10 @@ static int apple_pcie_setup_port(struct apple_pcie *pcie,
 	else
 		port->phy = pcie->base + CORE_PHY_DEFAULT_BASE(port->idx);
 
-	/* link might be already brought up by u-boot, skip setup then */
+	/*
+	 * link might be already brought up by u-boot, skip setup then
+	 * (power_off_suspend then stays off for this port: its GPIOs are only taken in setup_link)
+	 */
 	link_stat = readl_relaxed(port->base + PORT_LINKSTS);
 	if (!(link_stat & PORT_LINKSTS_UP)) {
 		ret = apple_pcie_setup_link(pcie, port, np);
@@ -988,7 +1270,13 @@ static int apple_pcie_probe(struct platform_device *pdev)
 	if (ret)
 		return ret;
 
-	return pci_host_common_init(pdev, bridge, &apple_pcie_cfg_ecam_ops);
+	ret = pci_host_common_init(pdev, bridge, &apple_pcie_cfg_ecam_ops);
+	if (ret)
+		return ret;
+
+	apple_pcie_test_host = pcie;
+	pcie->pm_nb.notifier_call = apple_pcie_pm_notify;
+	return register_pm_notifier(&pcie->pm_nb);
 }
 
 static const struct of_device_id apple_pcie_of_match[] = {
@@ -1004,6 +1292,7 @@ static struct platform_driver apple_pcie_driver = {
 		.name			= "pcie-apple",
 		.of_match_table		= apple_pcie_of_match,
 		.suppress_bind_attrs	= true,
+		.pm			= &apple_pcie_pm_ops,
 	},
 };
 module_platform_driver(apple_pcie_driver);
