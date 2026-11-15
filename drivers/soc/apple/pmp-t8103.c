@@ -530,6 +530,14 @@ static int pmp_resume_early(struct device *dev)
 	}
 	pmp->ready = true;
 	pmp->wakes++;
+	/*
+	 * The display front end is on again before any driver resumes (and a DCP restarted by
+	 * appledrm full_suspend asks the PMP for display bandwidth right away): tell the PMP, it
+	 * was told DISP0_FE off at suspend (2026-11-15: PMP crash at resume without this).
+	 */
+	ret = pmp_devpwr(pmp, 0x54, 1, true);
+	if (ret)
+		dev_warn(dev, "DevPwr DISP0_FE on at resume: %d\n", ret);
 	ret = pmp_devpwr(pmp, 0x68, 0, true);
 	dev_info(dev, "PMP awake (wake %u), ANE sync check %s\n", pmp->wakes, ret ? "FAILED" : "acked");
 	return 0;
@@ -556,6 +564,32 @@ static const struct kernel_param_ops devpwr_ops = {
 };
 module_param_cb(devpwr, &devpwr_ops, NULL, 0200);
 MODULE_PARM_DESC(devpwr, "send DevPwr: \"<dev> <state> [sync]\"");
+
+/*
+ * echo "<type> <arg1> <arg2>" > /sys/module/pmp_t8103/parameters/raw  (2026-11-14, DCS step): send
+ * one ep 0x20 message (type bits 56:44, arg1 43:16, arg2 15:0) to replay macOS-only messages,
+ * e.g. 0x20a "0x54 0x22" (DISP0_FE); the reply is logged as an unhandled message.
+ */
+static int raw_set(const char *val, const struct kernel_param *kp)
+{
+	u32 type, a1, a2;
+	int ret;
+
+	if (sscanf(val, "%i %i %i", &type, &a1, &a2) != 3 || type > 0x1fff || a1 > 0xfffffff ||
+	    a2 > 0xffff)
+		return -EINVAL;
+	if (!the_pmp || !the_pmp->ready)
+		return -ENODEV;
+	ret = pmp_send(the_pmp, pmp_msg(type, a1, a2));
+	dev_info(the_pmp->dev, "raw > %#018llx: %d\n", pmp_msg(type, a1, a2), ret);
+	return ret;
+}
+
+static const struct kernel_param_ops raw_ops = {
+	.set = raw_set,
+};
+module_param_cb(raw, &raw_ops, NULL, 0200);
+MODULE_PARM_DESC(raw, "send one ep 0x20 message: \"<type> <arg1> <arg2>\" (experiments)");
 
 static const struct of_device_id pmp_of_match[] = {
 	{ .compatible = "apple,t8103-pmp" },

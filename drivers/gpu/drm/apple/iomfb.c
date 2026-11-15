@@ -259,6 +259,15 @@ void dcp_hotplug(struct work_struct *work)
 	drm_kms_helper_connector_hotplug_event(&connector->base);
 }
 
+/*
+ * apple-s2idle: after a cold DCP firmware boot (full_suspend) the DCP sends callback D204,
+ * unknown to Linux and m1n1; left unacked it blocks the callback channel and every later
+ * swap (flip_done timeouts, 2026-11-15). Ack unknown callbacks with a zeroed output.
+ */
+static bool ack_unknown_cb = true;
+module_param(ack_unknown_cb, bool, 0644);
+MODULE_PARM_DESC(ack_unknown_cb, "Ack unknown DCP callbacks with zeroed output instead of leaving them pending");
+
 static void dcpep_handle_cb(struct apple_dcp *dcp, enum dcp_context_id context,
 			    void *data, u32 length, u16 offset)
 {
@@ -270,8 +279,25 @@ static void dcpep_handle_cb(struct apple_dcp *dcp, enum dcp_context_id context,
 	u8 depth;
 
 	if (tag < 0 || tag >= IOMFB_MAX_CB || !dcp->cb_handlers || !dcp->cb_handlers[tag]) {
-		dev_warn(dev, "received unknown callback %c%c%c%c\n",
-			 hdr->tag[3], hdr->tag[2], hdr->tag[1], hdr->tag[0]);
+		/* D204 (in 0, out 4) comes once per frame after a cold boot: log each tag once */
+		static DECLARE_BITMAP(seen, IOMFB_MAX_CB);
+
+		if (tag < 0 || tag >= IOMFB_MAX_CB || !test_and_set_bit(tag, seen)) {
+			dev_warn(dev, "received unknown callback %c%c%c%c (in %u, out %u)%s\n",
+				 hdr->tag[3], hdr->tag[2], hdr->tag[1], hdr->tag[0], hdr->in_len,
+				 hdr->out_len, ack_unknown_cb ? ", acked with zeroed output" : "");
+			print_hex_dump(KERN_WARNING, "dcp cb in: ", DUMP_PREFIX_OFFSET, 16, 4,
+				       data + sizeof(*hdr), min_t(u32, hdr->in_len, 128), false);
+		}
+		if (!ack_unknown_cb)
+			return;
+		out = data + sizeof(*hdr) + hdr->in_len;
+		if (hdr->out_len)
+			memset(out, 0, hdr->out_len);
+		depth = dcp_push_depth(&ch->depth);
+		ch->output[depth] = out;
+		ch->end[depth] = offset + ALIGN(length, DCP_PACKET_ALIGNMENT);
+		dcp_ack(dcp, context);
 		return;
 	}
 
@@ -536,13 +562,20 @@ void iomfb_recv_msg(struct apple_dcp *dcp, u64 message)
 
 int iomfb_start_rtkit(struct apple_dcp *dcp)
 {
-	dma_addr_t shmem_iova;
 	apple_rtkit_start_ep(dcp->rtk, IOMFB_ENDPOINT);
 
-	dcp->shmem = dma_alloc_coherent(dcp->dev, DCP_SHMEM_SIZE, &shmem_iova,
-					GFP_KERNEL);
+	/*
+	 * A restarted DCP (full_suspend) gets the same shared memory again, cleared as at
+	 * first allocation: ap_link reads a {ptr, size} heap header at offset 0 and adds it as
+	 * a heap pool when size != 0 (stale contents: RTK_heap_add_pool 0x80000001, 2026-11-15).
+	 */
+	if (!dcp->shmem)
+		dcp->shmem = dma_alloc_coherent(dcp->dev, DCP_SHMEM_SIZE, &dcp->shmem_iova,
+						GFP_KERNEL);
+	else
+		memset(dcp->shmem, 0, DCP_SHMEM_SIZE);
 
-	dcp_send_message(dcp, IOMFB_ENDPOINT, dcpep_set_shmem(shmem_iova));
+	dcp_send_message(dcp, IOMFB_ENDPOINT, dcpep_set_shmem(dcp->shmem_iova));
 
 	return 0;
 }

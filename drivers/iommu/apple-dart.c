@@ -244,6 +244,8 @@ struct apple_dart {
 
 	u32 save_tcr[DART_MAX_STREAMS];
 	u32 save_ttbr[DART_MAX_STREAMS][DART_MAX_TTBR];
+	u32 save_remap[DART_MAX_STREAMS / 4];	/* t8020 locked DARTs */
+	u32 save_streams[BITS_TO_U32(DART_MAX_STREAMS)];
 
 	u64 *locked_ttbr[DART_MAX_STREAMS][DART_MAX_TTBR];
 };
@@ -1689,14 +1691,27 @@ static const struct apple_dart_hw apple_dart_hw_t8110 = {
 	.ttbr_count = 1,
 };
 
+/*
+ * Locked DARTs (iBoot set them up and locked the config, e.g. the DCP DARTs) normally stay powered:
+ * nothing to save. When their power domain does go off (apple-s2idle DCP full shutdown,
+ * 2026-11-15), the lock and every register are lost while the page tables stay in DRAM, so their
+ * TCR/TTBR (and on t8020 the REMAP and STREAMS_ENABLE words) are saved too and written back
+ * at resume when the DART comes back unlocked.
+ */
 static __maybe_unused int apple_dart_suspend(struct device *dev)
 {
 	struct apple_dart *dart = dev_get_drvdata(dev);
 	unsigned int sid, idx;
 
-	/* Locked DARTs can't be restored so skip saving their registers. */
-	if (dart->locked)
+	if (dart->locked && dart->hw->type == DART_T8020) {
+		for (idx = 0; idx < DIV_ROUND_UP(dart->num_streams, 4); idx++)
+			dart->save_remap[idx] = readl(dart->regs + DART_T8020_REMAP + 4 * idx);
+		for (idx = 0; idx < BITS_TO_U32(dart->num_streams); idx++)
+			dart->save_streams[idx] =
+				readl(dart->regs + dart->hw->enable_streams + 4 * idx);
+	} else if (dart->locked) {
 		return 0;
+	}
 
 	for (sid = 0; sid < dart->num_streams; sid++) {
 		dart->save_tcr[sid] = readl(dart->regs + DART_TCR(dart, sid));
@@ -1714,8 +1729,8 @@ static __maybe_unused int apple_dart_resume(struct device *dev)
 	unsigned int sid, idx;
 	int ret;
 
-	/* Locked DARTs can't be restored, and they should not need it */
-	if (dart->locked)
+	/* Locked DARTs still locked kept their power and state: nothing to restore */
+	if (dart->locked && (dart->hw->type != DART_T8020 || apple_dart_is_locked(dart)))
 		return 0;
 
 	ret = apple_dart_hw_reset(dart);
@@ -1724,11 +1739,27 @@ static __maybe_unused int apple_dart_resume(struct device *dev)
 		return ret;
 	}
 
+	if (dart->locked) {
+		for (idx = 0; idx < DIV_ROUND_UP(dart->num_streams, 4); idx++)
+			writel(dart->save_remap[idx], dart->regs + DART_T8020_REMAP + 4 * idx);
+		for (idx = 0; idx < BITS_TO_U32(dart->num_streams); idx++)
+			writel(dart->save_streams[idx],
+			       dart->regs + dart->hw->enable_streams + 4 * idx);
+	}
+
 	for (sid = 0; sid < dart->num_streams; sid++) {
 		for (idx = 0; idx < dart->hw->ttbr_count; idx++)
 			writel(dart->save_ttbr[sid][idx],
 			       dart->regs + DART_TTBR(dart, sid, idx));
 		writel(dart->save_tcr[sid], dart->regs + DART_TCR(dart, sid));
+	}
+
+	if (dart->locked) {
+		struct apple_dart_stream_map stream_map = { .dart = dart };
+
+		bitmap_set(stream_map.sidmap, 0, dart->num_streams);
+		dart->hw->invalidate_tlb(&stream_map);
+		dev_info(dev, "locked DART lost power: registers restored (unlocked now)\n");
 	}
 
 	return 0;

@@ -8,6 +8,11 @@
 #include <linux/component.h>
 #include <linux/delay.h>
 #include <linux/dma-mapping.h>
+#include <linux/debugfs.h>
+#include <linux/firmware.h>
+#include <linux/io.h>
+#include <linux/of.h>
+#include <linux/suspend.h>
 #include <linux/gpio/consumer.h>
 #include <linux/iommu.h>
 #include <linux/jiffies.h>
@@ -1163,6 +1168,9 @@ static const struct component_ops dcp_comp_ops = {
 	.unbind	= dcp_comp_unbind,
 };
 
+static int dcp_pm_notify(struct notifier_block *nb, unsigned long action, void *data);
+static void dcp_data_debugfs(void);
+
 static int dcp_platform_probe(struct platform_device *pdev)
 {
 	enum dcp_firmware_version fw_compat;
@@ -1171,6 +1179,7 @@ static int dcp_platform_probe(struct platform_device *pdev)
 	int surf, num_surfs;
 	u32 surf_en;
 	u32 mux_index;
+	int err;
 
 	fw_compat = dcp_check_firmware_version(dev);
 	if (fw_compat == DCP_FIRMWARE_UNKNOWN)
@@ -1303,17 +1312,350 @@ static int dcp_platform_probe(struct platform_device *pdev)
 		}
 	}
 
-	return component_add(&pdev->dev, &dcp_comp_ops);
+	dcp_data_debugfs();	/* once, before the DCP is woken up by this driver (component bind) */
+	dcp->pm_nb.notifier_call = dcp_pm_notify;
+	register_pm_notifier(&dcp->pm_nb);
+
+	err = component_add(&pdev->dev, &dcp_comp_ops);
+	if (err)
+		unregister_pm_notifier(&dcp->pm_nb);
+	return err;
 }
 
 static void dcp_platform_remove(struct platform_device *pdev)
 {
+	struct apple_dcp *dcp = platform_get_drvdata(pdev);
+
+	unregister_pm_notifier(&dcp->pm_nb);
 	component_del(&pdev->dev, &dcp_comp_ops);
+	kvfree(dcp->cold_data);
 }
 
 static void dcp_platform_shutdown(struct platform_device *pdev)
 {
 	component_del(&pdev->dev, &dcp_comp_ops);
+}
+
+/*
+ * Experimental (apple-s2idle, 2026-11-15): full DCP shutdown across system suspend, so that genpd
+ * powers DISP0_CPU0 (DCP + its DARTs + mailbox) off as macOS sleep does (macOS: DISP0_CPU0 0f040300,
+ * and the PMP then lets DRAM gate; trace 12). DRM has already turned the display off (the DRM
+ * device suspends first). Suspend: AFK endpoints down as in unbind, IOMFB power off, RTKit
+ * shutdown (AP quiesced, IOP sleep, reinit), no wakeup path. Resume (the DARTs restore their
+ * registers themselves, apple-dart): CPU RUN, RTKit cold boot (HELLO), dcp_start() again and wait
+ * for the IOMFB boot sequence; DRM resume then powers the display on and sets the mode, as at boot.
+ * m1n1 does the same cold boot (src/dcp.c dcp_init) every chainload. Internal panel only.
+ */
+static bool full_suspend;
+module_param(full_suspend, bool, 0644);
+MODULE_PARM_DESC(full_suspend, "EXPERIMENTAL: shut the DCP down in system suspend and cold-restart it at resume");
+
+/*
+ * A cold boot of the DCP firmware needs its writable __DATA as loaded by iBoot from the Mach-O:
+ * after a run it holds the old heap pools (2026-11-15: ap_link RTK_heap_add_pool 0x80000001).
+ * cold_data is a raw image of __DATA (vmsize, BSS zero-filled), extracted once from the
+ * firmware iBoot loads (stub Preboot volume); it is loaded before suspend, while the root
+ * filesystem is usable, and written to the dcp_data carve-out (+ heap cleared) before RUN.
+ */
+static char *cold_data = "apple/dcp-t8103-data.bin";
+module_param(cold_data, charp, 0644);
+MODULE_PARM_DESC(cold_data, "full_suspend: firmware file with the pristine DCP __DATA (empty: none)");
+
+static unsigned int cold_clear = 0x1;
+module_param(cold_clear, uint, 0644);
+MODULE_PARM_DESC(cold_clear, "full_suspend: carve-outs cleared before a cold restart (bit 0 region57 heap, 1 region94, 2 region95)");
+
+static unsigned int cold_mode;
+module_param(cold_mode, uint, 0644);
+MODULE_PARM_DESC(cold_mode, "full_suspend restart: 0 cold_data + cold_keep, cold_clear; 1 all carve-outs from the probe snapshot (warm, as at bind); 2 cold_data + cold_keep, region57/94/95 from the snapshot");
+
+static int dcp_pm_notify(struct notifier_block *nb, unsigned long action, void *data)
+{
+	struct apple_dcp *dcp = container_of(nb, struct apple_dcp, pm_nb);
+	const struct firmware *fw;
+	int ret;
+
+	if (action != PM_SUSPEND_PREPARE || !full_suspend || dcp->cold_data || cold_mode == 1 ||
+	    !cold_data || !cold_data[0] || dcp->connector_type != DRM_MODE_CONNECTOR_eDP)
+		return NOTIFY_DONE;
+
+	ret = request_firmware_direct(&fw, cold_data, dcp->dev);
+	if (ret) {
+		dev_warn(dcp->dev, "full_suspend: no %s (%d): cold restart from the current __DATA\n",
+			 cold_data, ret);
+		return NOTIFY_DONE;
+	}
+	dcp->cold_data = kvmemdup(fw->data, fw->size, GFP_KERNEL);
+	dcp->cold_data_len = dcp->cold_data ? fw->size : 0;
+	release_firmware(fw);
+	dev_info(dcp->dev, "full_suspend: %s loaded (%zu bytes)\n", cold_data, dcp->cold_data_len);
+	return NOTIFY_DONE;
+}
+
+static int dcp_carveout(const char *name, struct resource *res)
+{
+	struct device_node *rmem, *np;
+	int ret = -ENOENT;
+
+	rmem = of_find_node_by_path("/reserved-memory");
+	if (!rmem)
+		return ret;
+	for_each_child_of_node(rmem, np) {
+		if (of_node_name_eq(np, name)) {
+			ret = of_address_to_resource(np, 0, res);
+			of_node_put(np);
+			break;
+		}
+	}
+	of_node_put(rmem);
+	return ret;
+}
+
+static void dcp_clear_carveout(struct apple_dcp *dcp, const char *name, const void *img, size_t len)
+{
+	struct resource res;
+	void *va;
+	size_t size;
+
+	if (dcp_carveout(name, &res)) {
+		dev_err(dcp->dev, "full_suspend: no %s carve-out\n", name);
+		return;
+	}
+	size = resource_size(&res);
+	if (len > size) {
+		dev_err(dcp->dev, "full_suspend: %s image %zu > carve-out %zu, not written\n", name, len, size);
+		return;
+	}
+	va = memremap(res.start, size, MEMREMAP_WC);
+	if (!va) {
+		dev_err(dcp->dev, "full_suspend: cannot map %s\n", name);
+		return;
+	}
+	if (len)
+		memcpy(va, img, len);
+	memset(va + len, 0, size - len);
+	wmb();
+	memunmap(va);
+	dev_info(dcp->dev, "full_suspend: %s %pa: %zu bytes image, %zu cleared\n", name, &res.start, len, size - len);
+}
+
+/*
+ * Snapshots, at probe (before this driver wakes the DCP), of the DCP carve-outs as iBoot and
+ * m1n1 leave them: initialized firmware (_rtk_power 0xcafe4b0b), ap_link not started yet.
+ * debugfs apple_dcp/data_boot (dcp_data snapshot), data_now (live dcp_data).
+ */
+static const char * const dcp_snap_names[] = { "dcp_data", "region57", "region94", "region95" };
+static void *dcp_snap[ARRAY_SIZE(dcp_snap_names)];
+static size_t dcp_snap_len[ARRAY_SIZE(dcp_snap_names)];
+#define dcp_data_boot dcp_snap[0]
+#define dcp_data_boot_len dcp_snap_len[0]
+static struct debugfs_blob_wrapper dcp_data_boot_blob;
+
+static ssize_t dcp_data_now_read(struct file *f, char __user *buf, size_t len, loff_t *ppos)
+{
+	struct resource res;
+	ssize_t ret;
+	void *va;
+
+	if (dcp_carveout("dcp_data", &res))
+		return -ENOENT;
+	va = memremap(res.start, resource_size(&res), MEMREMAP_WC);
+	if (!va)
+		return -ENOMEM;
+	ret = simple_read_from_buffer(buf, len, ppos, va, resource_size(&res));
+	memunmap(va);
+	return ret;
+}
+
+static const struct file_operations dcp_data_now_fops = {
+	.read = dcp_data_now_read,
+	.llseek = default_llseek,
+};
+
+static void dcp_data_debugfs(void)
+{
+	struct dentry *dir;
+	struct resource res;
+	void *va;
+	int i;
+
+	if (dcp_data_boot)
+		return;
+	for (i = 0; i < ARRAY_SIZE(dcp_snap_names); i++) {
+		if (dcp_carveout(dcp_snap_names[i], &res))
+			continue;
+		va = memremap(res.start, resource_size(&res), MEMREMAP_WC);
+		if (!va)
+			continue;
+		dcp_snap[i] = kvmalloc(resource_size(&res), GFP_KERNEL);
+		if (dcp_snap[i]) {
+			memcpy(dcp_snap[i], va, resource_size(&res));
+			dcp_snap_len[i] = resource_size(&res);
+		}
+		memunmap(va);
+	}
+	if (!dcp_data_boot)
+		return;
+	dir = debugfs_create_dir("apple_dcp", NULL);
+	dcp_data_boot_blob.data = dcp_data_boot;
+	dcp_data_boot_blob.size = dcp_data_boot_len;
+	debugfs_create_blob("data_boot", 0400, dir, &dcp_data_boot_blob);
+	debugfs_create_file("data_now", 0400, dir, NULL, &dcp_data_now_fops);
+}
+
+/*
+ * iBoot writes its handoff into __DATA before the first RUN; the firmware's cold path
+ * (_rtk_power magic 0xfeed1b00, set to 0xcafe4b0b once booted) needs it, so a pristine
+ * image alone hangs before HELLO (2026-11-15). Ranges (offsets in __DATA, ipad13dcp of
+ * 13.5/13.6: _rtk_patchbay = boot-arg records STKG/name/RHB1..., _rtk_tunables,
+ * _rtk_boot = initial page tables) are copied from the probe-time snapshot.
+ */
+static char *cold_keep = "0x15fe0c:0x528,0x160334:0x1e8,0x161000:0x5000";
+module_param(cold_keep, charp, 0644);
+MODULE_PARM_DESC(cold_keep, "full_suspend: __DATA ranges (off:len,...) taken from the probe snapshot, not cold_data");
+
+static void dcp_cold_overlay(struct apple_dcp *dcp)
+{
+	const char *p = cold_keep;
+	unsigned int off, len;
+	int n;
+
+	if (!dcp_data_boot || !p)
+		return;
+	while (*p && sscanf(p, "%x:%x%n", &off, &len, &n) == 2) {
+		if ((size_t)off + len <= dcp->cold_data_len && (size_t)off + len <= dcp_data_boot_len) {
+			memcpy(dcp->cold_data + off, dcp_data_boot + off, len);
+			dev_info(dcp->dev, "full_suspend: __DATA %#x+%#x from the boot snapshot\n", off, len);
+		}
+		p += n;
+		if (*p == ',')
+			p++;
+	}
+}
+
+static void dcp_cold_prepare(struct apple_dcp *dcp)
+{
+	int i;
+
+	if (cold_mode == 1) {
+		for (i = 0; i < ARRAY_SIZE(dcp_snap_names); i++)
+			if (dcp_snap[i])
+				dcp_clear_carveout(dcp, dcp_snap_names[i], dcp_snap[i], dcp_snap_len[i]);
+		return;
+	}
+	if (dcp->cold_data) {
+		dcp_cold_overlay(dcp);
+		dcp_clear_carveout(dcp, "dcp_data", dcp->cold_data, dcp->cold_data_len);
+	}
+	for (i = 1; i < ARRAY_SIZE(dcp_snap_names); i++) {
+		if (cold_mode == 2 && dcp_snap[i])
+			dcp_clear_carveout(dcp, dcp_snap_names[i], dcp_snap[i], dcp_snap_len[i]);
+		else if (cold_mode == 0 && (cold_clear & BIT(i - 1)))
+			dcp_clear_carveout(dcp, dcp_snap_names[i], NULL, 0);
+	}
+}
+
+static void dcp_endpoints_down(struct apple_dcp *dcp)
+{
+	if (dcp->avep) {
+		/* av_service_disconnect() already done by dcp_platform_suspend() */
+		afk_shutdown(dcp->avep);
+		dcp->avep = NULL;
+	}
+	if (dcp->dptxep) {
+		afk_shutdown(dcp->dptxep);
+		dcp->dptxep = NULL;
+	}
+	if (dcp->ibootep) {
+		afk_shutdown(dcp->ibootep);
+		dcp->ibootep = NULL;
+	}
+	if (dcp->systemep) {
+		afk_shutdown(dcp->systemep);
+		dcp->systemep = NULL;
+	}
+	if (dcp->dcpavservep) {
+		afk_shutdown(dcp->dcpavservep);
+		dcp->dcpavservep = NULL;
+	}
+}
+
+static int dcp_full_shutdown(struct apple_dcp *dcp)
+{
+	int ret;
+
+	dcp_endpoints_down(dcp);
+	if (dcp->shmem)
+		iomfb_shutdown(dcp);	/* active = false, set_power_state(off) */
+	msleep(50);
+	ret = apple_rtkit_shutdown(dcp->rtk);
+	if (ret) {
+		dev_err(dcp->dev, "full_suspend: RTKit shutdown failed: %d, keeping the DCP powered\n", ret);
+		return ret;
+	}
+	/*
+	 * CPU_CONTROL survives the power cut: with RUN still set the DCP boots as soon as
+	 * DISP0_CPU0 is powered again, before its DART is restored (2026-11-15: RTK_heap_add_pool
+	 * crash). Stop it; dcp_full_restart() sets RUN once the DARTs are back.
+	 */
+	writel_relaxed(readl_relaxed(dcp->coproc_reg + APPLE_DCP_COPROC_CPU_CONTROL) &
+		       ~APPLE_DCP_COPROC_CPU_CONTROL_RUN,
+		       dcp->coproc_reg + APPLE_DCP_COPROC_CPU_CONTROL);
+	dcp->full_off = true;
+	dev_info(dcp->dev, "full_suspend: DCP shut down\n");
+	return 0;
+}
+
+static int dcp_full_restart(struct apple_dcp *dcp)
+{
+	struct platform_device *pdev = to_platform_device(dcp->dev);
+	u32 cpu_ctrl;
+	int ret;
+
+	dcp->full_off = false;
+	cpu_ctrl = readl_relaxed(dcp->coproc_reg + APPLE_DCP_COPROC_CPU_CONTROL);
+	dev_info(dcp->dev, "full_suspend: restarting the DCP (CPU_CONTROL %#x)\n", cpu_ctrl);
+	dcp_cold_prepare(dcp);
+	/*
+	 * The IOMFB call channels belong to the old firmware instance: a command still marked
+	 * in flight (e.g. iomfb_shutdown()'s power off, unanswered before RTKit shutdown) makes
+	 * every later flush "unexpected busy command channel" (2026-11-15, 3rd restart).
+	 */
+	{
+		struct dcp_channel *chs[] = { &dcp->ch_cmd, &dcp->ch_oobcmd, &dcp->ch_cb,
+					      &dcp->ch_oobcb, &dcp->ch_async, &dcp->ch_oobasync };
+		int i;
+
+		for (i = 0; i < ARRAY_SIZE(chs); i++) {
+			if (chs[i]->depth)
+				dev_info(dcp->dev, "full_suspend: channel %d depth %u reset\n", i,
+					 chs[i]->depth);
+			chs[i]->depth = 0;
+			chs[i]->warned_busy = false;
+		}
+	}
+	writel_relaxed(cpu_ctrl | APPLE_DCP_COPROC_CPU_CONTROL_RUN,
+		       dcp->coproc_reg + APPLE_DCP_COPROC_CPU_CONTROL);
+
+	ret = apple_rtkit_boot(dcp->rtk);
+	if (ret) {
+		dev_err(dcp->dev, "full_suspend: RTKit boot failed: %d\n", ret);
+		return ret;
+	}
+	if (dcp->cold_data && cold_mode != 1) {
+		/* cold firmware boot: bring the panel up through iBoot's interface first */
+		ret = dcp_iboot_bringup(dcp);
+		dev_info(dcp->dev, "full_suspend: iboot bring-up: %d\n", ret);
+	}
+	ret = dcp_start(pdev);
+	if (ret)
+		dev_warn(dcp->dev, "full_suspend: dcp_start: %d\n", ret);
+	if (!wait_for_completion_timeout(&dcp->start_done, msecs_to_jiffies(5000))) {
+		dev_err(dcp->dev, "full_suspend: IOMFB boot did not finish\n");
+		return -ETIMEDOUT;
+	}
+	dev_info(dcp->dev, "full_suspend: DCP restarted (active %d)\n", dcp->active);
+	return 0;
 }
 
 static int dcp_platform_suspend(struct device *dev)
@@ -1328,6 +1670,22 @@ static int dcp_platform_suspend(struct device *dev)
 		disconnected_hpd_event(dcp->connector);
 		dcp_dptx_disconnect(dcp, 0);
 	}
+	if (full_suspend && dcp->connector_type == DRM_MODE_CONNECTOR_eDP && dcp->crashed) {
+		/* test aid: a crashed DCP is stopped, powered off and restarted like a shut-down one */
+		dcp_endpoints_down(dcp);
+		writel_relaxed(readl_relaxed(dcp->coproc_reg + APPLE_DCP_COPROC_CPU_CONTROL) &
+			       ~APPLE_DCP_COPROC_CPU_CONTROL_RUN,
+			       dcp->coproc_reg + APPLE_DCP_COPROC_CPU_CONTROL);
+		apple_rtkit_reinit(dcp->rtk);
+		dcp->crashed = false;
+		dcp->full_off = true;
+		dev_info(dcp->dev, "full_suspend: crashed DCP stopped, restart at resume\n");
+		return 0;
+	}
+	if (full_suspend && dcp->connector_type == DRM_MODE_CONNECTOR_eDP &&
+	    !dcp_full_shutdown(dcp))
+		return 0;	/* no wakeup path: genpd powers DISP0_CPU0 off */
+
 	/*
 	 * Set the device as a wakeup device, which forces its power
 	 * domains to stay on. We need this as we do not support full
@@ -1341,6 +1699,9 @@ static int dcp_platform_suspend(struct device *dev)
 static int dcp_platform_resume(struct device *dev)
 {
 	struct apple_dcp *dcp = dev_get_drvdata(dev);
+
+	if (dcp->full_off)
+		dcp_full_restart(dcp);
 
 	if (dcp->hdmi_hpd_irq)
 		enable_irq(dcp->hdmi_hpd_irq);

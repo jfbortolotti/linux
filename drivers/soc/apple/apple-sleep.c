@@ -94,11 +94,13 @@ module_param(dump, uint, 0644);
 MODULE_PARM_DESC(dump, "power-state dump at s2idle entry: 0 none, 1 domains not off, 2 all");
 
 /*
- * DISP0_* / RMX / DISPEXT_*: kept on by the DCP driver.
+ * DISP0_CPU0 / DISPEXT_*: kept on by the DCP driver (DISP0_CPU0 holds the DCP and its DART: needs a
+ * DCP full restart). DISP0_FE and RMX off in suspend: display back fine, ~1.3 mA (with the PCIe
+ * refclk release; deep 15 min 19.2 -> 17.9 mA, 2026-11-15), so no longer skipped.
  * FPWM0+FPWM2 off together hung the s2idle resume (each alone did not, 2026-11-10).
- * APCIE_GP (Wi-Fi PCIe) off lost the Wi-Fi once out of a few resumes.
+ * APCIE_GP (Wi-Fi PCIe) off lost the Wi-Fi once out of a few resumes (and loses the m1n1 PCIe init).
  */
-static char *skip = "DISP0_CPU0,DISP0_FE,RMX,DISPEXT_CPU0,DISPEXT_FE,FPWM0,FPWM2,APCIE_GP";
+static char *skip = "DISP0_CPU0,DISPEXT_CPU0,DISPEXT_FE,FPWM0,FPWM2,APCIE_GP";
 module_param(skip, charp, 0644);
 MODULE_PARM_DESC(skip, "comma-separated power-state names never touched (case-insensitive)");
 
@@ -1218,6 +1220,68 @@ static const struct kernel_param_ops smc_gpio_ops = {
 };
 module_param_cb(smc_gpio, &smc_gpio_ops, NULL, 0200);
 MODULE_PARM_DESC(smc_gpio, "awake: drive an SMC GPIO, <pin>=<0|1> (13 = Wi-Fi/BT PWREN)");
+
+/*
+ * reg_poke="<addr> <value>" (2026-11-14, DCS step): awake, write one 32-bit MMIO register (non-posted)
+ * and read it back at once, after 100 ms and after 1 s, to see whether the hardware keeps it or
+ * someone (PMP, a driver) rewrites it. No restore: write the old value back by hand.
+ */
+static int reg_poke_set(const char *val, const struct kernel_param *kp)
+{
+	u64 addr;
+	u32 v, before, r0, r1, r2;
+	void __iomem *va;
+
+	if (sscanf(val, "%llx %x", &addr, &v) != 2 || (addr & 3))
+		return -EINVAL;
+	va = ioremap_np(addr, 4);
+	if (!va)
+		return -ENOMEM;
+	before = readl(va);
+	writel(v, va);
+	r0 = readl(va);
+	msleep(100);
+	r1 = readl(va);
+	msleep(900);
+	r2 = readl(va);
+	iounmap(va);
+	pr_info("reg_poke %#llx: %08x, wrote %08x: now %08x, 100 ms %08x, 1 s %08x\n", addr, before, v,
+		r0, r1, r2);
+	return 0;
+}
+
+/* reg_peek="<addr> [count]": awake, read up to 16 consecutive 32-bit registers (non-posted) */
+static int reg_peek_set(const char *val, const struct kernel_param *kp)
+{
+	u64 addr;
+	u32 n = 1;
+	void __iomem *va;
+	char line[200];
+	int len = 0;
+
+	if (sscanf(val, "%llx %u", &addr, &n) < 1 || (addr & 3) || !n || n > 16)
+		return -EINVAL;
+	va = ioremap_np(addr, 4 * n);
+	if (!va)
+		return -ENOMEM;
+	for (u32 i = 0; i < n; i++)
+		len += scnprintf(line + len, sizeof(line) - len, " %08x", readl(va + 4 * i));
+	iounmap(va);
+	pr_info("reg_peek %#llx:%s\n", addr, line);
+	return 0;
+}
+
+static const struct kernel_param_ops reg_peek_ops = {
+	.set = reg_peek_set,
+};
+module_param_cb(reg_peek, &reg_peek_ops, NULL, 0200);
+MODULE_PARM_DESC(reg_peek, "awake: \"<addr> [count]\" read up to 16 32-bit registers");
+
+static const struct kernel_param_ops reg_poke_ops = {
+	.set = reg_poke_set,
+};
+module_param_cb(reg_poke, &reg_poke_ops, NULL, 0200);
+MODULE_PARM_DESC(reg_poke, "awake: \"<addr> <value>\" write a 32-bit register, read back now/100 ms/1 s");
 
 /* awake helpers for the wake-path tests (2026-11-14) */
 static int smc_wktp_set(const char *val, const struct kernel_param *kp)

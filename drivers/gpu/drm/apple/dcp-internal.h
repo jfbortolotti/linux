@@ -4,6 +4,7 @@
 #ifndef __APPLE_DCP_INTERNAL_H__
 #define __APPLE_DCP_INTERNAL_H__
 
+#include <linux/notifier.h>
 #include <linux/backlight.h>
 #include <linux/device.h>
 #include <linux/ioport.h>
@@ -141,6 +142,13 @@ struct apple_dcp {
 
 	/* DCP shared memory */
 	void *shmem;
+	dma_addr_t shmem_iova;
+	/* apple-s2idle: DCP fully shut down in suspend (DISP0_CPU0 off), restarted at resume */
+	bool full_off;
+	/* pristine __DATA image (cold_data firmware), written to dcp_data before a cold restart */
+	void *cold_data;
+	size_t cold_data_len;
+	struct notifier_block pm_nb;
 
 	/* Display registers mappable to the DCP */
 	struct resource *disp_registers[MAX_DISP_REGISTERS];
@@ -236,6 +244,7 @@ struct apple_dcp {
 	struct completion systemep_done;
 
 	struct apple_dcp_afkep *ibootep;
+	struct apple_epic_service *iboot_service;	/* disp0-service, full_suspend bring-up */
 	struct apple_dcp_afkep *dcpavservep;
 	struct dcpavserv dcpavserv;
 

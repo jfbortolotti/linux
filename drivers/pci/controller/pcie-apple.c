@@ -59,6 +59,14 @@ static bool power_off_suspend = true;
 module_param(power_off_suspend, bool, 0644);
 MODULE_PARM_DESC(power_off_suspend, "power off ports with a PWREN GPIO (Wi-Fi/BT) across system suspend (default N until verified)");
 
+/*
+ * with the device unpowered, also drop the port's refclk request (PHY REFCLK0/1REQ, REFCLKEN) so
+ * the PCIE_REF domain can clock-gate as in macOS sleep; apple_pcie_setup_refclk() at power-up
+ */
+static bool power_off_refclk = true;
+module_param(power_off_refclk, bool, 0644);
+MODULE_PARM_DESC(power_off_refclk, "power_off_suspend: also release the port refclk (default Y)");
+
 /* bisecting aid: assert PERST# before cutting PWREN (the working 21.4 mA test left it deasserted) */
 static bool power_off_perst = true;
 module_param(power_off_perst, bool, 0644);
@@ -243,6 +251,7 @@ struct apple_pcie_port {
 	bool			armed;		/* removal queued this suspend */
 	bool			removed;	/* devices gone, rescan owed */
 	bool			powered_off;
+	bool			refclk_off;
 	struct work_struct	remove_work;
 	struct work_struct	rescan_work;
 };
@@ -733,6 +742,20 @@ static void apple_pcie_port_power_off(struct apple_pcie *pcie, struct apple_pcie
 	}
 	dev_info(pcie->dev, "%pOF: PWREN off\n", port->np);
 	gpiod_set_value_cansleep(port->pwren, 0);
+	if (power_off_refclk) {
+		rmw_clear(PHY_LANE_CFG_REFCLKEN, port->phy + PHY_LANE_CFG);
+		if (pcie->hw->port_refclk)
+			rmw_clear(PORT_REFCLK_EN, port->base + pcie->hw->port_refclk);
+		if (pcie->hw->phy_lane_ctl)
+			rmw_set(PHY_LANE_CTL_CFGACC, port->phy + pcie->hw->phy_lane_ctl);
+		rmw_clear(PHY_LANE_CFG_REFCLK1REQ, port->phy + PHY_LANE_CFG);
+		rmw_clear(PHY_LANE_CFG_REFCLK0REQ, port->phy + PHY_LANE_CFG);
+		if (pcie->hw->phy_lane_ctl)
+			rmw_clear(PHY_LANE_CTL_CFGACC, port->phy + pcie->hw->phy_lane_ctl);
+		port->refclk_off = true;
+		dev_info(pcie->dev, "%pOF: refclk released (PHY_LANE_CFG %#x)\n", port->np,
+			 readl_relaxed(port->phy + PHY_LANE_CFG));
+	}
 	port->powered_off = true;
 	dev_info(pcie->dev, "%pOF: powered off for suspend\n", port->np);
 }
@@ -746,6 +769,14 @@ static void apple_pcie_port_power_on(struct apple_pcie *pcie, struct apple_pcie_
 	port->powered_off = false;
 	dev_info(pcie->dev, "%pOF: PWREN on\n", port->np);
 	gpiod_set_value_cansleep(port->pwren, 1);
+	if (port->refclk_off) {
+		port->refclk_off = false;
+		ret = apple_pcie_setup_refclk(pcie, port);
+		dev_info(pcie->dev, "%pOF: refclk requested again: %d (PHY_LANE_CFG %#x)\n", port->np, ret,
+			 readl_relaxed(port->phy + PHY_LANE_CFG));
+		if (ret < 0)
+			return;
+	}
 	/* Tpvperl: 100 ms from power stable to PERST# deassertion; the refclk stayed on */
 	msleep(100);
 	dev_info(pcie->dev, "%pOF: releasing PERST#\n", port->np);
