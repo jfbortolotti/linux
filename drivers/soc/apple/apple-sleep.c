@@ -73,7 +73,10 @@
 #include <linux/soc/apple/rtkit.h>
 #include <linux/soc/apple/sleep.h>
 #include <linux/string.h>
+#include <linux/stop_machine.h>
 #include <linux/suspend.h>
+
+#include "apple-sleep-macos-boot.h"
 
 #define LP_DOMAINS	BIT(2)
 #define LP_PS_AUTO	BIT(4)
@@ -709,7 +712,7 @@ static void meter_log(const char *tag, const struct as_meter *m)
 static void meter_exit(void)
 {
 	struct as_meter m;
-	s64 dt_ms, dbaac;
+	s64 dt_ms, dbaac, ma_c;
 
 	meter_read(&m);
 	meter_log("exit ", &m);
@@ -717,8 +720,11 @@ static void meter_exit(void)
 	if (!meter_entry.ok || !m.ok || dt_ms <= 0)
 		return;
 	dbaac = m.baac - meter_entry.baac;
-	pr_info("meter: %lld.%03lld s between readings, BAAC %+lld (%+lld per hour), B0RM %+d mAh\n",
+	/* BAAC counts mA*s (negative = discharge): average current = -dBAAC / dt_s, here in 1/100 mA */
+	ma_c = div64_s64(-dbaac * 100000, dt_ms);
+	pr_info("meter: %lld.%03lld s between readings, BAAC %+lld (%+lld per hour), average %s%lld.%02lld mA, B0RM %+d mAh\n",
 		dt_ms / 1000, dt_ms % 1000, dbaac, div64_s64(dbaac * 3600000, dt_ms),
+		ma_c < 0 ? "-" : "", abs(ma_c) / 100, abs(ma_c) % 100,
 		(int)m.b0rm - (int)meter_entry.b0rm);
 }
 
@@ -1410,9 +1416,9 @@ static void as_mask_irqs(bool mask)
  */
 static unsigned int soc_sleep;
 module_param(soc_sleep, uint, 0644);
-MODULE_PARM_DESC(soc_sleep, "deep: replay the macOS SoC sleep request (mask, see source): 0x1 PMGR quiesce, 0x2 CPU clusters, 0x4 SIO_CPU, 0x8 0x23d2c4000=1, 0x10 PMU go hib, 0x20 PMU S2R timer, 0x40 PMU boot_stage 0x50");
+MODULE_PARM_DESC(soc_sleep, "deep: replay the macOS SoC sleep request (mask, see source): 0x1 PMGR quiesce, 0x2 CPU clusters, 0x4 SIO_CPU, 0x8 0x23d2c4000=1, 0x10 PMU go hib, 0x20 PMU S2R timer, 0x40 PMU boot_stage 0x50, 0x80 SPMI controllers +0x38 = 1 (bus sleep, as macOS), 0x100 SEP sleep message (ep 0 type 0x0c) in .enter");
 
-#define SOC_SAVE_MAX	40
+#define SOC_SAVE_MAX	128
 static struct { phys_addr_t pa; u64 old; bool w64; } soc_saved[SOC_SAVE_MAX];
 static int soc_nsaved;
 /*
@@ -1421,6 +1427,8 @@ static int soc_nsaved;
  *   0x01 0x23b04014x = 0x80100000      0x02 0x23b734000/7c000/78000 = 0
  *   0x04 0x8014/0x82bc triggers         0x08 0x23b748xxx = 0
  *   0x10 0x23b71c080/88 = 0x80000000    0x20 0x23b718000/4 = 0
+ *   0x40/0x80/0x100: one block of group 0x04 each (0x68c008000 PCIe axi, 0x234008000, 0x279008000);
+ *   2026-11-17 timer test: group 0x04 alone stops the wake (watchdog), 0x01 and 0x02 do not
  */
 static unsigned int soc_skip;
 module_param(soc_skip, uint, 0644);
@@ -1428,12 +1436,129 @@ MODULE_PARM_DESC(soc_skip, "soc_sleep/soc_poke: groups of the 0x01 quiesce block
 #define SOC_G(g)	(!(soc_skip & (g)))
 static bool soc_slow;	/* soc_poke: 300 ms after every write, so that dmesg -w shows a freeze */
 
+/*
+ * soc_late=1 (2026-11-17): macOS runs its SoC sleep request on CPU0 alone, after CPUs 1-7 wrote
+ * CPUSTART and went down (trace 10: 183.98 CPUSTART, 184.06 quiesce, 184.07-185.03 the last WFIs;
+ * trace 11: quiesce 202.153, 0x23d2c4000 + PMU go hib 202.17-202.21 during the final core
+ * shutdowns). soc_sleep_request() in prepare_late runs with all 8 cores online (and 0x23b718000/4
+ * = 0 froze an awake Mac). With soc_late, prepare_late only builds the plan (MMIO mapped now, PMU
+ * SPMI controller found now) and .enter runs it with IRQs off, right before the last WFI; the PMU
+ * writes then go through an atomic raw SPMI command (the SPMI driver sleeps: mutex + poll).
+ */
+static bool soc_late;
+module_param(soc_late, bool, 0644);
+MODULE_PARM_DESC(soc_late, "deep: run the soc_sleep writes in .enter (CPU0 alone, IRQs off, before the last WFI) instead of prepare_late, as macOS");
+/*
+ * soc_early (2026-11-18): with soc_late, the PMGR/SPMI part of soc_sleep (0x80 SPMI +0x38, 0x01
+ * quiesce incl. the 0x23b718000/4 'go', 0x02 clusters, 0x04 SIO_CPU) is written at once in
+ * prepare_late, i.e. right before the secondaries go offline; only 0x23d2c4000 (0x08) and the PMU
+ * writes stay in .enter. HV trace 15 order: quiesce + go, then CPU7..1 ACC_OVRD DEEP_SLEEP, then
+ * CPU0 PMU go hib. A non-last core setting DEEP_SLEEP without the go hangs the Mac at once
+ * (cpu7 offline test, 2026-11-18): use with cpuidle_apple.secondary_deep.
+ */
+static bool soc_early;
+module_param(soc_early, bool, 0644);
+MODULE_PARM_DESC(soc_early, "deep, with soc_late: write the PMGR/SPMI part of soc_sleep (quiesce + go) in prepare_late, before the secondaries go down; PMU part stays in .enter");
+/*
+ * soc_cpustop (2026-11-18): with soc_early, CPU0 first writes the PMGR CPUSTART stop bits of
+ * CPUs 1-7 (0x23b754000 = 0xfe, the register each core writes for itself in cpuidle-apple's
+ * apple_cpuhp_die). XNU trace 10: the secondaries write CPUSTART (183.98) before CPU0's quiesce
+ * and go (184.06), and only then do their last DEEP_SLEEP WFI. The go in prepare_late without it
+ * reset the SoC within seconds (socE2/E3/E4, with and without secondary_deep).
+ */
+static bool soc_cpustop;
+module_param(soc_cpustop, bool, 0644);
+MODULE_PARM_DESC(soc_cpustop, "deep, with soc_early: write the CPUSTART stop bits of CPUs 1-7 before the early quiesce and go, as XNU");
+/* soc_go_delay_ms (2026-11-18): soc_early, CPU0 spins N ms after the go (timing the fast reset) */
+static unsigned int soc_go_delay_ms;
+module_param(soc_go_delay_ms, uint, 0644);
+MODULE_PARM_DESC(soc_go_delay_ms, "deep, with soc_early: busy-wait N ms right after the early go (diagnostic)");
+/*
+ * soc_pre (2026-11-18): with soc_early, macOS steps that come before its quiesce + go and that Linux
+ * does not do (HV trace 15, 322.90-323.47). The go in prepare_late resets the SoC at once without them.
+ *   0x1 temp sensor quiesce (AppleT8015TempSensor IOPlatformQuiesceAction, 323.29-323.42): 12 blocks,
+ *       +4 = 0xffffffff, +8 = 0x1013c00 then 0x2003c00 (iBoot/m1n1 leave +4 = 0, +8 = 0x13c00); restored at wake.
+ *       Since 2026-11-19 (review S1) also with soc_late alone: planned for .enter, before the quiesce, as macOS.
+ *   0x2 (review S2, 2026-11-19) the two fabric ports macOS quiesces and soc_sleep 0x01 did not: 0x26a008000 and
+ *       0x205008000 (+0x14 = 1, +0x2bc = 1, 2, 4; trace 16 226.58), first, as macOS; +0x14 restored at wake
+ *   0x100 diagnostic: the go (0x23b718000/4 = 0) and the soc_go_delay_ms spin run inside stop_machine(), every
+ *       other CPU spinning with IRQs off (XNU's secondaries are parked at the go; Linux's take ticks/IPIs in WFI)
+ */
+/*
+ * soc_park (2026-11-18): CPU mask. In .enter (soc_late, go not early), right after the planned go
+ * write, cpuidle-apple's apple_cpuhp_park_deep() restarts these offline secondaries (7 down to 1)
+ * into an m1n1 "park deep" (CPUSTART stop, ACC_OVRD DEEP_SLEEP, CYC_OVRD 0x3000001, gated WFI),
+ * as XNU takes its cores down after the go; then the rest of the plan (0x23d2c4000, PMU) runs.
+ */
+static unsigned int soc_park;
+module_param(soc_park, uint, 0644);
+MODULE_PARM_DESC(soc_park, "deep, soc_late: CPU mask to restart into an m1n1 DEEP_SLEEP park right after the go in .enter (0xfe = CPUs 1-7)");
+/*
+ * soc_hold / soc_hold_last (review K1, 2026-11-19): CPU masks. In .enter (soc_late), before the first
+ * planned write, cpuidle-apple's apple_cpuhp_park_hold() restarts these offline secondaries into
+ * m1n1's park deep with a hold flag: they stay online (WFE in m1n1) across the go and the PMU writes,
+ * as XNU's cores do. After the plan they are released, 7 down to 1, each down before the next; those
+ * also in soc_hold_last wait in m1n1 for CPU0 to power off, so they go down last (XNU: E 3-1, CPU0,
+ * P 7-4). Cores in soc_hold are left out of soc_park. 0 = off (default).
+ */
+static unsigned int soc_hold, soc_hold_last;
+module_param(soc_hold, uint, 0644);
+MODULE_PARM_DESC(soc_hold, "deep, soc_late: CPU mask held online in m1n1 across the go, released after the plan (0xfe = CPUs 1-7)");
+module_param(soc_hold_last, uint, 0644);
+MODULE_PARM_DESC(soc_hold_last, "with soc_hold: CPUs that wait for CPU0 to power off before going down (0xf0 = P cores, as XNU)");
+static bool soc_hold_nodeep;
+module_param(soc_hold_nodeep, bool, 0644);
+MODULE_PARM_DESC(soc_hold_nodeep, "with soc_hold, diagnostic: park the held cores without ACC_OVRD_DEEP_SLEEP (needed without the go: a non-last core with DEEP_SLEEP hangs the Mac)");
+static unsigned int soc_pre;
+module_param(soc_pre, uint, 0644);
+MODULE_PARM_DESC(soc_pre, "deep, soc_late or soc_early: macOS pre-go steps (mask): 0x1 temp sensor quiesce, 0x2 fabric ports 0x26a/0x205 quiesce, 0x100 (soc_early) go + soc_go_delay_ms inside stop_machine (diagnostic)");
+static const u64 soc_tsens[] = {
+	0x211ef1600ULL, 0x211ef1400ULL, 0x211ee1600ULL, 0x211ef1200ULL, 0x211ee1400ULL, 0x211ee9000ULL,
+	0x210ee1600ULL, 0x211ee1800ULL, 0x210ee1000ULL, 0x23b281200ULL, 0x23b281000ULL, 0x23b281400ULL,
+};
+
+#define SOC_PLAN_MAX	128
+static struct soc_op {
+	bool pmu, w64, save;
+	phys_addr_t pa;
+	void __iomem *va;
+	u64 val;
+	u16 addr;
+	u8 len, buf[4];
+} soc_plan[SOC_PLAN_MAX];
+static int soc_nplan;
+static bool soc_defer;		/* soc_sleep_request(): build soc_plan[] instead of writing */
+static void __iomem *soc_spmi_va;
+static u8 soc_pmu_sid;
+
+static void soc_plan_add(struct soc_op *op)
+{
+	if (soc_nplan >= SOC_PLAN_MAX) {
+		pr_err("soc_late: plan full, %09llx/%04x dropped\n", (u64)op->pa, op->addr);
+		return;
+	}
+	soc_plan[soc_nplan++] = *op;
+}
+
 static void soc_wr(phys_addr_t pa, u64 val, bool w64, bool save)
 {
-	void __iomem *va = ioremap_np(pa & PAGE_MASK, PAGE_SIZE);
+	void __iomem *va;
 	unsigned long off = pa & ~PAGE_MASK;
 	u64 old, rb;
 
+	if (soc_defer) {
+		struct soc_op op = { .pa = pa, .val = val, .w64 = w64, .save = save };
+
+		op.va = ioremap_np(pa & PAGE_MASK, PAGE_SIZE);
+		if (!op.va) {
+			pr_err("soc_late: ioremap %09llx failed\n", (u64)pa);
+			return;
+		}
+		op.va += off;
+		soc_plan_add(&op);
+		return;
+	}
+	va = ioremap_np(pa & PAGE_MASK, PAGE_SIZE);
 	if (!va) {
 		pr_err("soc_sleep: ioremap %09llx failed\n", (u64)pa);
 		return;
@@ -1468,23 +1593,290 @@ static void soc_restore(void)
 static int pmu_wr(struct spmi_device *pmu, u16 addr, const u8 *buf, size_t len)
 {
 	u8 old[4] = {};
-	int r0 = spmi_ext_register_readl(pmu, addr, old, len);
-	int ret = spmi_ext_register_writel(pmu, addr, buf, len);
+	int r0, ret;
+
+	if (soc_defer) {
+		struct soc_op op = { .pmu = true, .addr = addr, .len = len };
+
+		memcpy(op.buf, buf, len);
+		r0 = spmi_ext_register_readl(pmu, addr, old, len);
+		pr_info("soc_late: planned PMU %04x <- %*ph (now %*ph, read %d)\n", addr, (int)len, buf,
+			(int)len, old, r0);
+		soc_plan_add(&op);
+		return 0;
+	}
+	r0 = spmi_ext_register_readl(pmu, addr, old, len);
+	ret = spmi_ext_register_writel(pmu, addr, buf, len);
 
 	pr_info("soc_sleep: PMU %04x (%zu bytes, read %d: %*ph) <- %*ph: %d\n", addr, len, r0,
 		(int)len, old, (int)len, buf, ret);
 	return ret;
 }
 
+static const u32 soc_ps_off[] = { 0x3f0 /* ans2 */, 0x418 /* apcie_st */, 0x348 /* apcie */, 0x3e8 /* apcie_gp */ };
+static void __iomem *soc_ps_va;
+#define SEP_MBOX_PA		0x242408000ULL
+static void __iomem *soc_sep_mbox;
+
+static void soc_ps_log(const char *when)
+{
+	if (!soc_ps_va)
+		return;
+	pr_info("soc_late: %s: ps ans2 %08x apcie_st %08x apcie %08x apcie_gp %08x\n", when,
+		readl(soc_ps_va + soc_ps_off[0]), readl(soc_ps_va + soc_ps_off[1]),
+		readl(soc_ps_va + soc_ps_off[2]), readl(soc_ps_va + soc_ps_off[3]));
+}
+
+static void __iomem *soc_go_va;
+
+static int soc_go_stopped(void *unused)
+{
+	writel(0, soc_go_va);
+	writel(0, soc_go_va + 4);
+	for (unsigned int i = 0; i < soc_go_delay_ms; i++)
+		udelay(1000);
+	return 0;
+}
+
+/*
+ * disp_cycle (review S3, 2026-11-19): mask, 0x1 disp0, 0x2 dispext, 0 = off (default).
+ * Both HV traces (16: 226.54-226.63, 17: 264.91-265.11), 3.7 s before the CPUs go down, macOS power-
+ * cycles the display fabric although all of it is already off: RMX on (+ the 0x225000000 blocks
+ * programmed), DISP0_FE on, fabric port 0x232008000 reprogrammed, DISP0_CPU0 on, same for DISPEXT
+ * (0x272008000); ~150 ms later DISP0_CPU0 off, port quiesce (+0x14 = 1, +0x2bc = 1, 2, 4), DISP0_FE off,
+ * same for dispext, RMX off. It leaves both ports quiesced before their domain is gated; Linux gates
+ * DISP0_FE (if it does) without that quiesce, and never touches the 0x232/0x272 ports.
+ * Here, in prepare_late (devices suspended): RMX on, for each selected pipe FE on if off (CPU0 left as is if on,
+ * else not touched), port quiesce, FE off; RMX back off. At wake FE is put back on if it was on (port state is then
+ * whatever the power-up gives; the display resume will tell whether that is enough).
+ * 0x4 (2026-11-20): also the macOS power-up init tables (apple-sleep-macos-disp.h: RMX blocks after RMX on,
+ * each port after its FE on); 0x8: CPU0 domains on after the init, off before the quiesce, as macOS (only
+ * a CPU0 whose target is off, the macOS start state: Linux keeps DISP0_CPU0 on for the warm DCP).
+ * Both phases run dispext first, as macOS.
+ */
+static unsigned int disp_cycle;
+module_param(disp_cycle, uint, 0644);
+MODULE_PARM_DESC(disp_cycle, "prepare_late: macOS display fabric cycle (mask): 0x1 disp0 (FE on, port 0x232008000 quiesce, FE off), 0x2 dispext (port 0x272008000), 0x4 + macOS RMX/port init tables after power-up, 0x8 + CPU0 domains on/off as macOS; FE restored at wake");
+
+#include "apple-sleep-macos-disp.h"
+
+#define DC_PS_ACTUAL(v)	(((v) >> 4) & 0xf)
+/* macOS order: dispext first, then disp0, in both phases */
+static const struct {
+	u32 fe, cpu0; phys_addr_t port; const char *name;
+	const struct as_disp_wr *init; size_t ninit;
+} dc_pipe[] = {
+	{ 0x360, 0x10018, 0x232008000ULL, "disp0", as_disp_port_disp0, ARRAY_SIZE(as_disp_port_disp0) },
+	{ 0x368, 0x378, 0x272008000ULL, "dispext", as_disp_port_dispext, ARRAY_SIZE(as_disp_port_dispext) },
+};
+static const int dc_order[] = { 1, 0 };
+static u32 dc_fe_old[2];
+static bool dc_done[2];
+
+static int dc_ps_set(void __iomem *ps, u32 target)
+{
+	u32 v = readl(ps);
+
+	/* keep the other fields, clear the W1C WAS_* flags (bits 9:8), new target in 3:0 */
+	writel((v & ~0x30fu) | target, ps);
+	for (int t = 0; t < 1000; t++) {
+		if (DC_PS_ACTUAL(readl(ps)) == target)
+			return 0;
+		udelay(10);
+	}
+	return -ETIMEDOUT;
+}
+
+/* write a macOS table, one 16 KiB mapping per page as boot_replay */
+static int dc_table(const char *what, const struct as_disp_wr *w, size_t n)
+{
+	void __iomem *va = NULL;
+	u64 page = 0;
+	size_t k;
+
+	for (k = 0; k < n; k++) {
+		u64 pa = 0x200000000ULL + w[k].pa_lo;
+
+		if (!va || (pa & ~0x3fffULL) != page) {
+			if (va)
+				iounmap(va);
+			page = pa & ~0x3fffULL;
+			va = ioremap_np(page, 0x4000);
+			if (!va) {
+				pr_err("disp_cycle: %s: ioremap %09llx failed after %zu writes\n", what, page, k);
+				return -ENOMEM;
+			}
+		}
+		writel(w[k].val, va + (pa & 0x3fff));
+	}
+	if (va)
+		iounmap(va);
+	pr_info("disp_cycle: %s: %zu macOS init writes\n", what, n);
+	return 0;
+}
+
+static void disp_cycle_run(void)
+{
+	void __iomem *ps = ioremap_np(0x23b700000ULL, 0x11000);
+	bool cpu0_on[2] = { false, false };
+	u32 rmx_old;
+
+	if (!disp_cycle || !ps)
+		goto out;
+	pr_info("disp_cycle: before: RMX %08x DISP0_FE %08x DISPEXT_FE %08x DISP0_CPU0 %08x DISPEXT_CPU0 %08x\n",
+		readl(ps + 0x350), readl(ps + 0x360), readl(ps + 0x368), readl(ps + 0x10018),
+		readl(ps + 0x378));
+	/* RMX is the FEs' parent (FE PS bit 11 PARENT_OFF): macOS powers it first, gates it last */
+	rmx_old = readl(ps + 0x350);
+	if (DC_PS_ACTUAL(rmx_old) != 0xf && dc_ps_set(ps + 0x350, 0xf)) {
+		pr_err("disp_cycle: RMX did not power on (%08x)\n", readl(ps + 0x350));
+		dc_ps_set(ps + 0x350, rmx_old & 0xf);
+		goto out;
+	}
+	if (disp_cycle & 0x4)
+		dc_table("RMX 0x225000000", as_disp_rmx, ARRAY_SIZE(as_disp_rmx));
+
+	/* phase 1, as macOS: per pipe FE on, port init (0x4), CPU0 on (0x8) */
+	for (int j = 0; j < ARRAY_SIZE(dc_order); j++) {
+		int i = dc_order[j];
+		void __iomem *fe = ps + dc_pipe[i].fe;
+
+		dc_done[i] = false;
+		if (!(disp_cycle & BIT(i)))
+			continue;
+		dc_fe_old[i] = readl(fe);
+		if (DC_PS_ACTUAL(dc_fe_old[i]) != 0xf && dc_ps_set(fe, 0xf)) {
+			pr_err("disp_cycle: %s FE did not power on (%08x), skipped\n", dc_pipe[i].name, readl(fe));
+			dc_ps_set(fe, dc_fe_old[i] & 0xf);
+			continue;
+		}
+		dc_done[i] = true;
+		if (disp_cycle & 0x4)
+			dc_table(dc_pipe[i].name, dc_pipe[i].init, dc_pipe[i].ninit);
+		/* only a CPU0 that is off (macOS start state); Linux keeps DISP0_CPU0 on for the warm DCP */
+		if ((disp_cycle & 0x8) && !(readl(ps + dc_pipe[i].cpu0) & 0xf)) {
+			int r = dc_ps_set(ps + dc_pipe[i].cpu0, 0xf);
+
+			cpu0_on[i] = !r;
+			pr_info("disp_cycle: %s CPU0 on: %08x%s\n", dc_pipe[i].name,
+				readl(ps + dc_pipe[i].cpu0), r ? " (TIMEOUT)" : "");
+		}
+	}
+
+	/* phase 2, as macOS: per pipe CPU0 off, port quiesce, FE off */
+	for (int j = 0; j < ARRAY_SIZE(dc_order); j++) {
+		int i = dc_order[j];
+		void __iomem *fe = ps + dc_pipe[i].fe, *port;
+		u32 q0, s0;
+		int off;
+
+		if (!dc_done[i])
+			continue;
+		if (cpu0_on[i]) {
+			off = dc_ps_set(ps + dc_pipe[i].cpu0, 0);
+			pr_info("disp_cycle: %s CPU0 off: %08x%s\n", dc_pipe[i].name,
+				readl(ps + dc_pipe[i].cpu0), off ? " (TIMEOUT)" : "");
+		}
+		port = ioremap_np(dc_pipe[i].port, 0x1000);
+		if (port) {
+			q0 = readl(port + 0x14);
+			s0 = readl(port + 0x2bc);
+			writel(1, port + 0x14);
+			writel(1, port + 0x2bc);
+			writel(2, port + 0x2bc);
+			writel(4, port + 0x2bc);
+			pr_info("disp_cycle: %s FE %08x -> %08x, port +0x14 %x +0x2bc %x -> +0x14 %x +0x2bc %x\n",
+				dc_pipe[i].name, dc_fe_old[i], readl(fe), q0, s0, readl(port + 0x14),
+				readl(port + 0x2bc));
+			iounmap(port);
+		}
+		off = dc_ps_set(fe, 0);
+		pr_info("disp_cycle: %s FE off: %08x%s\n", dc_pipe[i].name, readl(fe), off ? " (TIMEOUT)" : "");
+	}
+	if (DC_PS_ACTUAL(rmx_old) != 0xf)
+		dc_ps_set(ps + 0x350, rmx_old & 0xf);
+	pr_info("disp_cycle: after: RMX %08x DISP0_FE %08x DISPEXT_FE %08x\n",
+		readl(ps + 0x350), readl(ps + 0x360), readl(ps + 0x368));
+out:
+	if (ps)
+		iounmap(ps);
+}
+
+static void disp_cycle_restore(void)
+{
+	void __iomem *ps;
+
+	if (!dc_done[0] && !dc_done[1])
+		return;
+	ps = ioremap_np(0x23b700000ULL, 0x1000);
+	if (!ps)
+		return;
+	for (int i = 0; i < ARRAY_SIZE(dc_pipe); i++) {
+		if (!dc_done[i])
+			continue;
+		if (DC_PS_ACTUAL(dc_fe_old[i]) == 0xf) {
+			int ret = dc_ps_set(ps + dc_pipe[i].fe, dc_fe_old[i] & 0xf);
+
+			pr_info("disp_cycle: %s FE back on: %08x%s\n", dc_pipe[i].name,
+				readl(ps + dc_pipe[i].fe), ret ? " (TIMEOUT)" : "");
+		}
+		dc_done[i] = false;
+	}
+	iounmap(ps);
+}
+
 static void soc_sleep_request(void)
 {
 	static const u64 cl[] = { 0x210e20000ULL, 0x211e20000ULL };	/* E, P cluster */
 	static const u64 blk[] = { 0x68c008000ULL, 0x234008000ULL, 0x279008000ULL };
+	static const u32 blk_ps[] = { 0x348 /* apcie */, 0 /* pmgr[45], agent unknown */, 0x3f0 /* ans2 */ };
 
 	if (!soc_sleep)
 		return;
 	pr_info("soc_sleep: mask %#x, skip %#x\n", soc_sleep, soc_skip);
+	bool early = soc_defer && soc_early;
+
+	if (early) {
+		pr_info("soc_early: PMGR/SPMI part now, PMU part planned for .enter\n");
+		soc_defer = false;
+		if (soc_cpustop)
+			soc_wr(0x23b754000ULL, 0xfe, false, false);	/* CPUSTART stop, CPUs 1-7 */
+	}
+	/* review S2: macOS quiesces these two ports at 226.58, before the PMP stop */
+	if (soc_pre & 0x2)
+		for (int i = 0; i < 2; i++) {
+			phys_addr_t b = i ? 0x205008000ULL : 0x26a008000ULL;
+
+			soc_wr(b + 0x14, 1, false, true);
+			soc_wr(b + 0x2bc, 1, false, false);
+			soc_wr(b + 0x2bc, 2, false, false);
+			soc_wr(b + 0x2bc, 4, false, false);
+		}
+	/* review S1: temp sensors (macOS 228.16-228.27), early or planned for .enter */
+	if (soc_pre & 0x1)
+		for (int i = 0; i < ARRAY_SIZE(soc_tsens); i++) {
+			soc_wr(soc_tsens[i] + 4, 0xffffffff, false, true);
+			soc_wr(soc_tsens[i] + 8, 0x1013c00, false, true);
+			soc_wr(soc_tsens[i] + 8, 0x2003c00, false, false);
+		}
+	if (!soc_ps_va)
+		soc_ps_va = ioremap_np(0x23b700000ULL, 0x1000);
+	soc_ps_log("prepare_late");
+	if ((soc_sleep & 0x100) && !soc_sep_mbox)
+		soc_sep_mbox = ioremap_np(SEP_MBOX_PA, 0x4000);
 	soc_nsaved = 0;
+	/*
+	 * 0x80 (2026-11-18, HV trace 15 322.98-323.05): macOS's AppleGen1SPMIController sleep action
+	 * writes +0x38 = 1 on SPMI1, SPMI0 and the AOP SPMI (0 under iBoot/Linux; an SPMI bus sleep /
+	 * idle control?), before the PMGR quiesce. Saved, so back to 0 at wake for Linux's SPMI driver.
+	 * soc_skip 0x200 leaves out the AOP SPMI.
+	 */
+	if (soc_sleep & 0x80) {
+		soc_wr(0x23d0e1338ULL, 1, false, true);		/* SPMI1 */
+		soc_wr(0x23d0d9338ULL, 1, false, true);		/* SPMI0 (PMU) */
+		if (SOC_G(0x200))
+			soc_wr(0x24a829338ULL, 1, false, true);	/* AOP SPMI */
+	}
 	if ((soc_sleep & 0x01) && SOC_G(0x01))
 		for (int i = 0; i < 5; i++)
 			soc_wr(0x23b040140ULL + (i < 4 ? 4 * i : 0x14), 0x80100000, false, true);
@@ -1503,7 +1895,21 @@ static void soc_sleep_request(void)
 		for (int i = 0; i < 3; i++) {
 			phys_addr_t b = blk[i];
 
-			soc_wr(b + 0x14, 1, false, false);
+			if (!SOC_G(0x40 << i))	/* 0x40 0x68c (PCIe axi), 0x80 0x234, 0x100 0x279 */
+				continue;
+			/*
+			 * 2026-11-17: Linux has already power-gated some agents here (genpd, noirq), macOS
+			 * has not. Quiescing the fabric port of an off agent (ans2 0f002300 at .enter,
+			 * block 0x279 = ans[4]) stops the wake; nothing to drain from an off agent, skip.
+			 */
+			if (blk_ps[i] && soc_ps_va && !(readl(soc_ps_va + blk_ps[i]) & 0xf0)) {
+				pr_info("soc_sleep: %09llx quiesce skipped, agent ps +%#x off (%08x)\n",
+					(u64)b, blk_ps[i], readl(soc_ps_va + blk_ps[i]));
+				continue;
+			}
+			/* restored at wake: 0x279008000 is ans[4] (NVMe); left quiesced, the resume hangs
+			 * (2026-11-17 timer test). macOS gets the block back reset from SoC sleep. */
+			soc_wr(b + 0x14, 1, false, true);
 			soc_wr(b + 0x2bc, 1, false, false);
 			soc_wr(b + 0x2bc, 2, false, false);
 			soc_wr(b + 0x2bc, 4, false, false);
@@ -1525,12 +1931,34 @@ static void soc_sleep_request(void)
 		soc_wr(0x23b71c080ULL, 0x80000000, false, true);
 		soc_wr(0x23b71c088ULL, 0x80000000, false, true);
 	}
-	if ((soc_sleep & 0x01) && SOC_G(0x20)) {
+	if (early && (soc_pre & 0x100) && (soc_sleep & 0x01) && SOC_G(0x20)) {
+		soc_go_va = ioremap_np(0x23b718000ULL, 0x10);
+		if (soc_go_va && soc_nsaved + 2 <= SOC_SAVE_MAX) {
+			for (int i = 0; i < 2; i++) {
+				soc_saved[soc_nsaved].pa = 0x23b718000ULL + 4 * i;
+				soc_saved[soc_nsaved].old = readl(soc_go_va + 4 * i);
+				soc_saved[soc_nsaved].w64 = false;
+				soc_nsaved++;
+			}
+			pr_info("soc_early: go inside stop_machine, %u ms spin, 718000 %x 718004 %x\n",
+				soc_go_delay_ms, readl(soc_go_va), readl(soc_go_va + 4));
+			stop_machine(soc_go_stopped, NULL, NULL);
+			pr_info("soc_early: stop_machine go done, 718000 reads %x\n", readl(soc_go_va));
+		}
+	} else if ((soc_sleep & 0x01) && SOC_G(0x20)) {
 		soc_wr(0x23b718000ULL, 0, false, true);
 		soc_wr(0x23b718004ULL, 0, false, true);
 	}
+	if (early && soc_go_delay_ms && !(soc_pre & 0x100) && (soc_sleep & 0x01) && SOC_G(0x20)) {
+		pr_info("soc_early: go done, spinning %u ms\n", soc_go_delay_ms);
+		for (unsigned int i = 0; i < soc_go_delay_ms; i++)
+			udelay(1000);
+		pr_info("soc_early: spin done\n");
+	}
 	if (soc_sleep & 0x04)
 		soc_wr(0x23b7001d0ULL, 0x400024f, false, true);
+	if (early)
+		soc_defer = true;	/* soc_early: the rest goes to .enter */
 	if (soc_sleep & 0x08)
 		soc_wr(0x23d2c4000ULL, 1, false, false);
 
@@ -1542,6 +1970,20 @@ static void soc_sleep_request(void)
 		if (IS_ERR_OR_NULL(pmu)) {
 			pr_err("soc_sleep: PMU SPMI device not found\n");
 			return;
+		}
+		if (soc_defer && !soc_spmi_va) {
+			struct device_node *ctl = of_get_parent(pmu->dev.of_node);
+			struct resource res;
+
+			if (ctl && !of_address_to_resource(ctl, 0, &res))
+				soc_spmi_va = ioremap_np(res.start, resource_size(&res));
+			of_node_put(ctl);
+			soc_pmu_sid = pmu->usid;
+			if (!soc_spmi_va) {
+				pr_err("soc_late: SPMI controller not mapped, no PMU writes\n");
+				put_device(&pmu->dev);
+				return;
+			}
 		}
 		if (soc_sleep & 0x40)
 			pmu_wr(pmu, 0x9f01, (const u8[]){ 0x50 }, 1);
@@ -1557,6 +1999,281 @@ static void soc_sleep_request(void)
 	}
 	pr_info("soc_sleep: request done\n");
 }
+
+/*
+ * Raw SPMI extended register write, IRQs off (spmi-apple-controller.c protocol: command word,
+ * data words, then one reply word with the ACK bit). The notify IRQ it raises is acked here.
+ */
+static int soc_spmi_writel_atomic(u8 sid, u16 addr, const u8 *buf, size_t len)
+{
+	void __iomem *r = soc_spmi_va;
+	u32 w, reply;
+	size_t i, j;
+	int t, ret;
+
+	if (soc_sleep & 0x80)
+		writel(0, r + 0x38);	/* macOS: bus awake for the command (trace 15, 323.563) */
+	writel(0x30 | (len - 1) | (u32)sid << 8 | (u32)addr << 16 | BIT(15), r + 0x4);
+	for (i = 0; i < len; i += j) {
+		j = min_t(size_t, 4, len - i);
+		w = 0;
+		memcpy(&w, buf + i, j);
+		writel(w, r + 0x4);
+	}
+	for (t = 0; t < 5000 && (readl(r) & BIT(24)); t++)	/* RX FIFO empty, <= 50 ms */
+		udelay(10);
+	if (readl(r) & BIT(24)) {
+		ret = -ETIMEDOUT;
+	} else {
+		reply = readl(r + 0x8);
+		writel(BIT(0), r + 0x60 + (256 / 32) * 4);	/* ack SPMI_IRQ_NOTIFY */
+		ret = (reply & BIT(15)) ? 0 : -EIO;
+	}
+	if (soc_sleep & 0x80)
+		writel(1, r + 0x38);	/* and back to bus sleep after it */
+	return ret;
+}
+
+/*
+ * Agent power states seen by the quiesce in .enter (2026-11-17: the ANS fabric quiesce 0x279008xxx
+ * stops the wake; is ps_ans2 already off by then, i.e. are we quiescing a power-gated agent?)
+ */
+
+
+/*
+ * soc_sleep 0x100 (2026-11-18, HV trace 15 322.12 s): macOS AppleSEPManager::_setPowerState(2 -> 0)
+ * sends the SEP a sleep message on endpoint 0 (tag 8, type 0x0c, param 2) and the SEP answers type
+ * 0x01 (322.23 s). Linux never sends it. Sent here through the SEP mailbox registers (ASC v4, as
+ * drivers/soc/apple/mailbox.c): CPU0 alone, IRQs off, so the replies are drained and logged here and
+ * the Linux SEP driver never sees them. The wake message is unknown: the SEP stays asleep.
+ */
+#define SEP_MSG_SLEEP		0x00000000020c0800ULL
+
+static void soc_sep_sleep(void)
+{
+	void __iomem *m = soc_sep_mbox;
+	u64 r0, r1;
+	int t, n = 0;
+	bool ack = false;
+
+	if (!(soc_sleep & 0x100) || !m)
+		return;
+	for (t = 0; t < 1000 && (readl(m + 0x110) & BIT(16)); t++)	/* A2I full */
+		udelay(100);
+	if (readl(m + 0x110) & BIT(16)) {
+		pr_err("soc_late: SEP mailbox A2I full, sleep message not sent\n");
+		return;
+	}
+	writeq(SEP_MSG_SLEEP, m + 0x800);
+	writeq(0, m + 0x808);
+	for (t = 0; t < 5000 && !ack; t++) {				/* <= 500 ms */
+		while (!(readl(m + 0x114) & BIT(17)) && n < 16) {	/* I2A not empty */
+			r0 = readq(m + 0x830);
+			r1 = readq(m + 0x838);
+			n++;
+			pr_info("soc_late: SEP reply %016llx %016llx after %d00 us\n", r0, r1, t);
+			if ((r0 & 0xff) == 0 && ((r0 >> 16) & 0xff) == 0x01)
+				ack = true;
+		}
+		if (!ack)
+			udelay(100);
+	}
+	pr_info("soc_late: SEP sleep message %016llx: %s (%d replies)\n", SEP_MSG_SLEEP,
+		ack ? "acked" : "NO ack", n);
+}
+
+/* .enter, CPU0 alone, IRQs off: the planned soc_sleep writes, in the macOS order */
+static void soc_plan_run(void)
+{
+	unsigned int park = soc_park & ~soc_hold;
+	bool parked = false;
+
+	if (soc_hold)
+		pr_info("soc_late: park_hold before the plan: %d cores held (mask %#x, last %#x)\n",
+			apple_cpuhp_park_hold(soc_hold, soc_hold_last, !soc_hold_nodeep), soc_hold, soc_hold_last);
+	soc_sep_sleep();
+	soc_ps_log(".enter");
+	for (int i = 0; i < soc_nplan; i++) {
+		struct soc_op *op = &soc_plan[i];
+		u64 old, rb;
+
+		if (op->pmu) {
+			int ret = soc_spmi_writel_atomic(soc_pmu_sid, op->addr, op->buf, op->len);
+
+			pr_info("soc_late: PMU %04x <- %*ph: %d\n", op->addr, op->len, op->buf, ret);
+			continue;
+		}
+		old = op->w64 ? readq(op->va) : readl(op->va);
+		if (op->save && soc_nsaved < SOC_SAVE_MAX) {
+			soc_saved[soc_nsaved].pa = op->pa;
+			soc_saved[soc_nsaved].old = old;
+			soc_saved[soc_nsaved].w64 = op->w64;
+			soc_nsaved++;
+		}
+		if (op->w64)
+			writeq(op->val, op->va);
+		else
+			writel(op->val, op->va);
+		rb = op->w64 ? readq(op->va) : readl(op->va);
+		pr_info("soc_late: %09llx %llx -> %llx (reads %llx)\n", (u64)op->pa, old, op->val, rb);
+		if (op->pa == 0x23b718004ULL && park && !parked) {
+			pr_info("soc_late: park_deep after the go: %d cores parked (mask %#x)\n",
+				apple_cpuhp_park_deep(park), park);
+			parked = true;
+		}
+	}
+	/* no go in the plan (soc_skip 0x20): park at the end, to test the mechanism alone */
+	if (park && !parked)
+		pr_info("soc_late: park_deep, no go: %d cores parked (mask %#x)\n",
+			apple_cpuhp_park_deep(park), park);
+	if (soc_hold)
+		pr_info("soc_late: park_release after the plan: %d cores down, %#x wait for CPU0\n",
+			apple_cpuhp_park_release(), soc_hold_last & soc_hold);
+}
+
+static void soc_plan_free(void)
+{
+	for (int i = 0; i < soc_nplan; i++)
+		if (soc_plan[i].va)
+			iounmap((void __iomem *)((unsigned long)soc_plan[i].va & PAGE_MASK));
+	soc_nplan = 0;
+	if (soc_spmi_va)
+		iounmap(soc_spmi_va);
+	soc_spmi_va = NULL;
+}
+
+/*
+ * soc_spmi_echo=<addr>: awake check of soc_spmi_writel_atomic(): read one PMU byte through the
+ * SPMI driver, write the same value back through the raw path with IRQs off, read it again.
+ */
+static int soc_spmi_echo_set(const char *val, const struct kernel_param *kp)
+{
+	struct device_node *np, *ctl;
+	struct spmi_device *pmu;
+	struct resource res;
+	unsigned long flags;
+	u8 v0 = 0, v1 = 0;
+	unsigned int addr;
+	int r0, r1, ret = kstrtouint(val, 0, &addr);
+
+	if (ret || addr > 0xffff)
+		return -EINVAL;
+	np = of_find_compatible_node(NULL, NULL, "apple,sera-pmic");
+	pmu = np ? spmi_find_device_by_of_node(np) : NULL;
+	of_node_put(np);
+	if (IS_ERR_OR_NULL(pmu))
+		return -ENODEV;
+	ctl = of_get_parent(pmu->dev.of_node);
+	if (ctl && !of_address_to_resource(ctl, 0, &res))
+		soc_spmi_va = ioremap_np(res.start, resource_size(&res));
+	of_node_put(ctl);
+	if (!soc_spmi_va) {
+		put_device(&pmu->dev);
+		return -ENOMEM;
+	}
+	r0 = spmi_ext_register_readl(pmu, addr, &v0, 1);
+	local_irq_save(flags);
+	ret = soc_spmi_writel_atomic(pmu->usid, addr, &v0, 1);
+	local_irq_restore(flags);
+	r1 = spmi_ext_register_readl(pmu, addr, &v1, 1);
+	pr_info("soc_spmi_echo: PMU sid %u %04x = %02x (read %d), atomic write back: %d, now %02x (read %d)\n",
+		pmu->usid, addr, v0, r0, ret, v1, r1);
+	iounmap(soc_spmi_va);
+	soc_spmi_va = NULL;
+	put_device(&pmu->dev);
+	return 0;
+}
+
+static const struct kernel_param_ops soc_spmi_echo_ops = {
+	.set = soc_spmi_echo_set,
+};
+module_param_cb(soc_spmi_echo, &soc_spmi_echo_ops, NULL, 0200);
+MODULE_PARM_DESC(soc_spmi_echo, "awake: check the atomic SPMI path, write a PMU register's own value back (logged)");
+
+/*
+ * boot_replay=<mask> (2026-11-18): write now (awake) the macOS boot-time PMGR set-up that iBoot leaves
+ * at 0 (HV trace 15; apple-sleep-macos-boot.h). Candidates for the missing SoC-sleep wake, and 0x8 for
+ * power. The sleep quiesce (soc_sleep 0x01, groups 0x02/0x08) clears the enables at entry and restores
+ * them at wake, as macOS. Order as macOS: 0x8 (1.73 s), 0x1, 0x2 (1.82-1.90 s), 0x4 (1.91 s).
+ *   0x1 0x23b734000 table (+0x120.., enable +0 last)   0x2 0x23b778000 / 0x23b77c000 tables + enables
+ *   0x4 0x23b748000/400/800/c00 = 1, 0x23b71c000/040 = 0x80000000
+ *   0x8 PMGR[31] 0x23b204000 thermal/voltage-monitor thresholds
+ */
+static unsigned int boot_replay_done;
+
+static void boot_replay_group(unsigned int g, const struct as_boot_wr *w, size_t n)
+{
+	void __iomem *va = NULL;
+	u64 page = ~0ULL;
+	size_t k;
+
+	for (k = 0; k < n; k++) {
+		u64 pa = 0x200000000ULL + w[k].pa_lo;
+
+		if ((pa & ~0xfffULL) != page) {
+			if (va)
+				iounmap(va);
+			page = pa & ~0xfffULL;
+			va = ioremap_np(page, 0x1000);
+			if (!va) {
+				pr_err("boot_replay 0x%x: ioremap %09llx failed after %zu writes\n", g, page, k);
+				return;
+			}
+		}
+		writel(w[k].val, va + (pa & 0xfff));
+	}
+	if (va)
+		iounmap(va);
+	boot_replay_done |= g;
+	pr_info("boot_replay 0x%x: %zu writes done\n", g, n);
+}
+
+static u32 boot_replay_peek(u64 pa)
+{
+	void __iomem *va = ioremap_np(pa & ~0xfffULL, 0x1000);
+	u32 v;
+
+	if (!va)
+		return 0xdeadbeef;
+	v = readl(va + (pa & 0xfff));
+	iounmap(va);
+	return v;
+}
+
+static int boot_replay_set(const char *val, const struct kernel_param *kp)
+{
+	unsigned int mask;
+	int ret = kstrtouint(val, 0, &mask);
+
+	if (ret)
+		return ret;
+	if (mask & 0x8)
+		boot_replay_group(0x8, as_boot_g8, ARRAY_SIZE(as_boot_g8));
+	if (mask & 0x1)
+		boot_replay_group(0x1, as_boot_g1, ARRAY_SIZE(as_boot_g1));
+	if (mask & 0x2)
+		boot_replay_group(0x2, as_boot_g2, ARRAY_SIZE(as_boot_g2));
+	if (mask & 0x4)
+		boot_replay_group(0x4, as_boot_g4, ARRAY_SIZE(as_boot_g4));
+	pr_info("boot_replay: now 734000 %x 734120 %x 778000 %x 778100 %x 77c000 %x 748000 %x 71c000 %x 204004 %x\n",
+		boot_replay_peek(0x23b734000ULL), boot_replay_peek(0x23b734120ULL),
+		boot_replay_peek(0x23b778000ULL), boot_replay_peek(0x23b778100ULL),
+		boot_replay_peek(0x23b77c000ULL), boot_replay_peek(0x23b748000ULL),
+		boot_replay_peek(0x23b71c000ULL), boot_replay_peek(0x23b204004ULL));
+	return 0;
+}
+
+static int boot_replay_get(char *buf, const struct kernel_param *kp)
+{
+	return sysfs_emit(buf, "%#x\n", boot_replay_done);
+}
+
+static const struct kernel_param_ops boot_replay_ops = {
+	.set = boot_replay_set,
+	.get = boot_replay_get,
+};
+module_param_cb(boot_replay, &boot_replay_ops, NULL, 0644);
+MODULE_PARM_DESC(boot_replay, "awake: replay macOS boot PMGR set-up missing under iBoot/Linux (mask: 0x1 734 table, 0x2 778/77c tables, 0x4 748/71c000, 0x8 PMGR[31] thermal table); reads back the groups done");
 
 /*
  * soc_poke=<mask>: awake bisecting aid for soc_sleep (2026-11-14, T1 = 0x09 never woke). Runs the
@@ -1701,7 +2418,16 @@ static int as_suspend_prepare_late(void)
 		deep_smc_step("SetAPPower 0x201", ret);
 	}
 	as_mask_irqs(true);
-	soc_sleep_request();
+	disp_cycle_run();
+	soc_nsaved = 0;
+	if (soc_late && soc_sleep) {
+		soc_defer = true;
+		soc_sleep_request();
+		soc_defer = false;
+		pr_info("soc_late: %d writes planned for .enter\n", soc_nplan);
+	} else {
+		soc_sleep_request();
+	}
 	irq_live_log();
 	return 0;
 }
@@ -1901,6 +2627,62 @@ static void as_wdt_disarm(void)
 }
 
 /*
+ * deep_wd0_s=N (review W4, 2026-11-19): the AON timer block 0x23d2b0000 has three apple_wdt-style
+ * timers: WD0 (+0x00 count, +0x04 bite, +0x08 bark, +0x0c ctrl), WD1 (+0x10, the reset watchdog above),
+ * WD2 (+0x20). Under iBoot/m1n1/Linux WD0 counts at 24 MHz with ctrl 0. macOS zeroes WD0 count + ctrl
+ * (and WD1 count, 0x23d2b8008/c) at sleep; the ADT ap-wake-sources have 49 NUB.APWatchdog and
+ * 50 NUB.APWakeupTime. Guess: WD0 with IRQ_EN only (no RESET_EN) is the AP wake timer. Armed in .enter
+ * (after the drivers, IRQs off), N s, max 178; at wake its ctrl (bit 1 IRQ_STATUS = it fired) is logged
+ * and it goes back to idle (count 0, ctrl 0). The WD0 AIC IRQ is not requested by Linux (stays masked).
+ */
+#define AS_WD0_CUR		0x00
+#define AS_WD0_BITE		0x04
+#define AS_WD0_CTRL		0x0c
+#define AS_WDT_IRQ_EN		BIT(0)
+#define AS_WDT_IRQ_STATUS	BIT(1)
+static unsigned int deep_wd0_s;
+module_param(deep_wd0_s, uint, 0644);
+MODULE_PARM_DESC(deep_wd0_s, "deep test: arm the AON WD0 timer with IRQ only (no reset) N s (max 178) after the deep entry, as a possible hardware wake timer (APWakeupTime?); 0 = off");
+static void __iomem *as_wd0_va;
+static u32 as_wd0_saved[3];	/* cur, bite, ctrl */
+static bool as_wd0_armed;
+
+static void as_wd0_arm(void)
+{
+	if (!deep_wd0_s || !as_wd0_va)
+		return;
+	as_wd0_saved[0] = readl(as_wd0_va + AS_WD0_CUR);
+	as_wd0_saved[1] = readl(as_wd0_va + AS_WD0_BITE);
+	as_wd0_saved[2] = readl(as_wd0_va + AS_WD0_CTRL);
+	writel(0, as_wd0_va + AS_WD0_CTRL);
+	writel(0, as_wd0_va + AS_WD0_CUR);
+	writel(min_t(u64, (u64)deep_wd0_s * 24000000ULL, U32_MAX), as_wd0_va + AS_WD0_BITE);
+	writel(AS_WDT_IRQ_STATUS, as_wd0_va + AS_WD0_CTRL);	/* clear a stale status (W1C, as apple_wdt) */
+	writel(AS_WDT_IRQ_EN, as_wd0_va + AS_WD0_CTRL);
+	as_wd0_armed = true;
+}
+
+static void as_wd0_disarm(void)
+{
+	u32 cur, ctrl;
+
+	if (!as_wd0_armed)
+		return;
+	as_wd0_armed = false;
+	cur = readl(as_wd0_va + AS_WD0_CUR);
+	ctrl = readl(as_wd0_va + AS_WD0_CTRL);
+	writel(0, as_wd0_va + AS_WD0_CTRL);
+	writel(AS_WDT_IRQ_STATUS, as_wd0_va + AS_WD0_CTRL);
+	writel(0, as_wd0_va + AS_WD0_CTRL);
+	writel(as_wd0_saved[1], as_wd0_va + AS_WD0_BITE);
+	writel(0, as_wd0_va + AS_WD0_CUR);
+	writel(as_wd0_saved[2], as_wd0_va + AS_WD0_CTRL);
+	pr_info("deep_wd0_s: at wake count %u ms, ctrl %#x (%s), was cur %#x bite %#x ctrl %#x before\n",
+		cur / 24000, ctrl, (ctrl & AS_WDT_IRQ_STATUS) ? "FIRED" : "not fired",
+		as_wd0_saved[0], as_wd0_saved[1], as_wd0_saved[2]);
+}
+
+/*
  * Keep the safety net through device resume (2026-11-16: pcie-apple power_off_gp froze in
  * resume_noirq, after the deep wake had already disarmed it): at wake the count restarts with the
  * full deep_wdt_s, the watchdog is disarmed only at PM_POST_SUSPEND, once every device has resumed.
@@ -1924,6 +2706,273 @@ static struct notifier_block as_pm_nb = {
 	.notifier_call = as_pm_notify,
 };
 
+/*
+ * slc_off (2026-11-16): the MCC writes macOS makes on CPU0 right before its SoC sleep (HV trace 13,
+ * 327.93 s), minus the boot-time tables Linux never programs (+0x158000/+0x24000 entry enables,
+ * DCS0 counters). Bit 0: system level cache off, PLANE_CACHE_ENABLE (+0x1c00) = 0 between the
+ * +0x10000c/+0x100014 = 1/0 pulses (macOS brackets every MCC config write with them), plane 0
+ * only (2026-11-16: writing the saved 0 to planes 1-3 turned the cache off again), status polled. Bit 1: plane
+ * +0x21008/+0x21000 = 0. Bit 2: +0x155000 = 0. Bit 3: DCS n +0x7a0 = 0 (8 channels). All saved and
+ * restored in reverse order after the deep WFI loop (cache back on as m1n1 does). Only registers
+ * read safely one by one under Linux are touched (some MCC reads hang the SoC).
+ */
+#define MCC_PHYS		0x200000000ULL
+#define MCC_SIZE		0x400000
+#define MCC_PLANE(p)		((p) * 0x40000)
+#define MCC_DCS(n)		(0x200000 + (n) * 0x40000)
+#define MCC_LOCK0		0x10000c
+#define MCC_LOCK1		0x100014
+#define MCC_CACHE_EN		0x1c00
+#define MCC_CACHE_ST		0x1c04
+#define MCC_CACHE_ST_WAYS	GENMASK(14, 5)
+static unsigned int slc_off;
+module_param(slc_off, uint, 0644);
+MODULE_PARM_DESC(slc_off, "deep: MCC as macOS at SoC sleep: 0x1 system level cache off, 0x2 plane +0x21000/8 = 0, 0x4 +0x155000 = 0, 0x8 DCS +0x7a0 = 0 (restored at wake)");
+static void __iomem *mcc_va;
+static unsigned int slc_done;
+static u32 slc_en[4], slc_st_on[4], slc_st_off[4], slc_irq[4][2], slc_155, slc_7a0[8];
+static int slc_err;
+
+static void mcc_cfg(u32 v)
+{
+	writel(v, mcc_va + MCC_LOCK0);
+	writel(v, mcc_va + MCC_LOCK1);
+}
+
+static u32 mcc_poll_ways(int p, u32 want)
+{
+	u32 v = 0;
+
+	for (int i = 0; i < 10000; i++) {
+		v = readl(mcc_va + MCC_PLANE(p) + MCC_CACHE_ST);
+		if ((v & MCC_CACHE_ST_WAYS) == want)
+			return v;
+		udelay(1);
+	}
+	slc_err++;
+	return v;
+}
+
+static void slc_disable(void)
+{
+	int i;
+
+	slc_done = 0;
+	slc_err = 0;
+	if (!slc_off)
+		return;
+	if (!mcc_va)
+		mcc_va = ioremap_np(MCC_PHYS, MCC_SIZE);
+	if (!mcc_va)
+		return;
+	slc_done = slc_off & 0xf;
+	if (slc_done & 0x1) {
+		/* plane 0 only, as macOS: planes 1-3 read 0 but a write there acts on the same cache */
+		for (i = 0; i < 1; i++) {
+			slc_en[i] = readl(mcc_va + MCC_PLANE(i) + MCC_CACHE_EN);
+			slc_st_on[i] = readl(mcc_va + MCC_PLANE(i) + MCC_CACHE_ST);
+			mcc_cfg(1);
+			writel(0, mcc_va + MCC_PLANE(i) + MCC_CACHE_EN);
+			mcc_cfg(0);
+			slc_st_off[i] = mcc_poll_ways(i, 0);
+		}
+	}
+	if (slc_done & 0x2) {
+		for (i = 0; i < 4; i++) {
+			slc_irq[i][1] = readl(mcc_va + MCC_PLANE(i) + 0x21008);
+			slc_irq[i][0] = readl(mcc_va + MCC_PLANE(i) + 0x21000);
+			writel(0, mcc_va + MCC_PLANE(i) + 0x21008);
+			writel(0, mcc_va + MCC_PLANE(i) + 0x21000);
+		}
+	}
+	if (slc_done & 0x4) {
+		slc_155 = readl(mcc_va + 0x155000);
+		writel(0, mcc_va + 0x155000);
+	}
+	if (slc_done & 0x8) {
+		for (i = 0; i < 8; i++) {
+			slc_7a0[i] = readl(mcc_va + MCC_DCS(i) + 0x7a0);
+			writel(0, mcc_va + MCC_DCS(i) + 0x7a0);
+		}
+	}
+}
+
+static void slc_restore(void)
+{
+	int i;
+
+	if (slc_done & 0x8)
+		for (i = 0; i < 8; i++)
+			writel(slc_7a0[i], mcc_va + MCC_DCS(i) + 0x7a0);
+	if (slc_done & 0x4)
+		writel(slc_155, mcc_va + 0x155000);
+	if (slc_done & 0x2) {
+		for (i = 0; i < 4; i++) {
+			writel(slc_irq[i][0], mcc_va + MCC_PLANE(i) + 0x21000);
+			writel(slc_irq[i][1], mcc_va + MCC_PLANE(i) + 0x21008);
+		}
+	}
+	if (slc_done & 0x1) {
+		for (i = 0; i < 1; i++) {
+			mcc_cfg(1);
+			writel(slc_en[i], mcc_va + MCC_PLANE(i) + MCC_CACHE_EN);
+			mcc_cfg(0);
+			mcc_poll_ways(i, slc_st_on[i] & MCC_CACHE_ST_WAYS);
+		}
+	}
+}
+
+static void slc_log(void)
+{
+	if (!slc_done)
+		return;
+	pr_info("slc_off %#x: cache en %x %x %x %x, status on %x %x %x %x, off %x %x %x %x, now %x; 0x21000 %x 0x155000 %x 0x7a0 %x; %d poll timeouts\n",
+		slc_done, slc_en[0], slc_en[1], slc_en[2], slc_en[3],
+		slc_st_on[0], slc_st_on[1], slc_st_on[2], slc_st_on[3],
+		slc_st_off[0], slc_st_off[1], slc_st_off[2], slc_st_off[3],
+		readl(mcc_va + MCC_CACHE_ST), slc_irq[0][0], slc_155, slc_7a0[0], slc_err);
+	slc_done = 0;
+}
+
+/*
+ * wake_gpio (review 2026-11-19): the ADT ap-wake-sources include the GPIO *interrupt groups*
+ * 12 AOP.GPIO.IRQ4, 14 AOP.GPIO.IRQ6 and 47 NUB.GPIO.IRQ6 (aop/nub-gpio: supported-int-groups 4,5,6,
+ * wake-no-interrupt-group 4). pinctrl-apple-gpio puts every IRQ pin in group 0, which is no wake source.
+ * macOS (HV trace 16): keyboard IRQ pin nub 13 in group 6 from boot (0x66a0f), at sleep 226.48 ack
+ * group 6 (+0x980 = BIT(13)) then 0x66a07 (IRQ level low, group 6); 228.28 ack group 4 on AOP
+ * (+0x900/+0x904) and NUB (+0x900). aop-gpio wake-events lists pin 22 (lid) any-edge.
+ * wake_gpio=mask (0x1 lid, 0x2 keyboard): the same at .enter (IRQs off, all drivers suspended), right
+ * before the SoC plan; restored at .wake. wake_gpio_now=mask/0: move/restore awake.
+ * 2026-11-19: awake, keyboard in group 6 works (IRQs via AIC 336); lid in group 6 + the first lid edge
+ * = hard SoC hang (no IRQ counted, no log), twice. Wake source 14 (AOP.GPIO.IRQ6) is enabled under
+ * iBoot/Linux masks, or the AOP owns pin 22 / AOP group 6 (macOS's AP never writes pin 22).
+ */
+#define WG_AOP_PA	0x24a820000ULL
+#define WG_NUB_PA	0x23d1f0000ULL
+#define WG_GRP		GENMASK(18, 16)
+#define WG_MODE		GENMASK(3, 1)
+#define WG_IRQ(g, pin)	(0x800 + 0x40 * (g) + 4 * ((pin) >> 5))
+
+static const struct { bool nub; u8 pin, mode; const char *name; } wg_pins[] = {
+	{ false, 22, 6, "lid (aop 22, any edge)" },
+	{ true,  13, 3, "keyboard (nub 13, level low)" },
+};
+#define WG_N	ARRAY_SIZE(wg_pins)
+
+static unsigned int wake_gpio;
+module_param(wake_gpio, uint, 0644);
+MODULE_PARM_DESC(wake_gpio, "deep: mask, 0x1 lid (aop 22; HANGS the SoC on a lid edge awake), 0x2 keyboard (nub 13): move the IRQ to GPIO group 6 (ADT wake sources 14/47) + ack group 4 in .enter, as macOS; restored at wake");
+
+static void __iomem *wg_va[2];	/* 0 aop, 1 nub */
+static u32 wg_saved[WG_N];
+static unsigned int wg_moved;	/* mask of moved pins */
+
+static int wg_map(void)
+{
+	if (!wg_va[0])
+		wg_va[0] = ioremap_np(WG_AOP_PA, 0x1000);
+	if (!wg_va[1])
+		wg_va[1] = ioremap_np(WG_NUB_PA, 0x1000);
+	return wg_va[0] && wg_va[1] ? 0 : -ENOMEM;
+}
+
+static void wg_log(const char *tag)
+{
+	if (!wg_va[0] || !wg_va[1])
+		return;
+	for (int i = 0; i < WG_N; i++) {
+		u32 v = readl(wg_va[wg_pins[i].nub] + 4 * wg_pins[i].pin);
+
+		pr_info("wake_gpio %s: %s %08x (mode %lu, group %lu)\n", tag, wg_pins[i].name, v,
+			FIELD_GET(WG_MODE, v), FIELD_GET(WG_GRP, v));
+	}
+}
+
+/* in .enter / awake knob; no sleeping, no allocation */
+static void wg_move(unsigned int mask)
+{
+	mask &= GENMASK(WG_N - 1, 0);
+	if (wg_moved || !mask || !wg_va[0] || !wg_va[1])
+		return;
+	for (int i = 0; i < WG_N; i++) {
+		void __iomem *b = wg_va[wg_pins[i].nub];
+		u8 pin = wg_pins[i].pin;
+		u32 v = readl(b + 4 * pin);
+
+		if (!(mask & BIT(i)))
+			continue;
+
+		wg_saved[i] = v;
+		writel(BIT(pin % 32), b + WG_IRQ(6, pin));	/* ack group 6 first, as macOS */
+		writel((v & ~(WG_GRP | WG_MODE)) | FIELD_PREP(WG_GRP, 6) |
+		       FIELD_PREP(WG_MODE, wg_pins[i].mode), b + 4 * pin);
+	}
+	/* ack group 4 (wake-no-interrupt group), as macOS at 228.28 */
+	writel(~0U, wg_va[0] + WG_IRQ(4, 0));
+	writel(~0U, wg_va[0] + WG_IRQ(4, 32));
+	writel(~0U, wg_va[1] + WG_IRQ(4, 0));
+	wg_moved = mask;
+}
+
+static void wg_restore(void)
+{
+	if (!wg_moved)
+		return;
+	for (int i = 0; i < WG_N; i++) {
+		void __iomem *b = wg_va[wg_pins[i].nub];
+		u8 pin = wg_pins[i].pin;
+		u32 now;
+
+		if (!(wg_moved & BIT(i)))
+			continue;
+		now = readl(b + 4 * pin);
+		/* back to the Linux group; keep a mode the drivers changed meanwhile, else the saved one */
+		writel((now & ~WG_GRP) | (wg_saved[i] & WG_GRP), b + 4 * pin);
+		/* a pending bit latched in group 6 would never be acked by the group-0 handler */
+		writel(BIT(pin % 32), b + WG_IRQ(6, pin));
+	}
+	wg_moved = 0;
+}
+
+static int wake_gpio_now_set(const char *val, const struct kernel_param *kp)
+{
+	unsigned int mask;
+	int ret = kstrtouint(val, 0, &mask);
+
+	if (ret)
+		return ret;
+	ret = wg_map();
+	if (ret)
+		return ret;
+	wg_log("before");
+	wg_restore();
+	wg_move(mask);
+	wg_log("after ");
+	return 0;
+}
+
+static int wake_gpio_now_get(char *buf, const struct kernel_param *kp)
+{
+	int len = 0;
+
+	if (wg_map())
+		return scnprintf(buf, PAGE_SIZE, "unmapped\n");
+	for (int i = 0; i < WG_N; i++) {
+		u32 v = readl(wg_va[wg_pins[i].nub] + 4 * wg_pins[i].pin);
+
+		len += scnprintf(buf + len, PAGE_SIZE - len, "%s %08x mode %lu group %lu%s", wg_pins[i].name,
+				 v, FIELD_GET(WG_MODE, v), FIELD_GET(WG_GRP, v), i + 1 < WG_N ? " | " : "\n");
+	}
+	return len;
+}
+
+static const struct kernel_param_ops wake_gpio_now_ops = {
+	.set = wake_gpio_now_set,
+	.get = wake_gpio_now_get,
+};
+module_param_cb(wake_gpio_now, &wake_gpio_now_ops, NULL, 0644);
+MODULE_PARM_DESC(wake_gpio_now, "awake: mask as wake_gpio (0x1 lid: hangs on a lid edge, 0x2 keyboard) = move to group 6 now, 0 = put back; read = pin registers");
+
 static int as_suspend_enter(suspend_state_t state)
 {
 	u64 dw_ctl = 0, dw_cval = 0, deadline = 0;
@@ -1938,6 +2987,10 @@ static int as_suspend_enter(suspend_state_t state)
 	}
 	irq_snap_take();
 	as_wdt_arm();
+	as_wd0_arm();
+	wg_move(wake_gpio);
+	slc_disable();
+	soc_plan_run();
 	df_nlog = 0;
 	df_lost = 0;
 	df_filtered = 0;
@@ -1978,6 +3031,10 @@ static int as_suspend_enter(suspend_state_t state)
 			break;
 		}
 	}
+	/* before ->wake: the secondaries are brought back online in between */
+	if (soc_hold)
+		apple_cpuhp_park_unhold();
+	slc_restore();
 	if (deep_wake_s) {
 		write_sysreg(dw_ctl | ARCH_TIMER_CTRL_IT_MASK, cntv_ctl_el0);
 		write_sysreg(dw_cval, cntv_cval_el0);
@@ -2029,9 +3086,18 @@ static void deep_filter_log(void)
 static void as_suspend_wake(void)
 {
 	as_wdt_rearm_for_resume();
+	as_wd0_disarm();
+	if (wg_moved) {
+		wg_log("at wake");
+		wg_restore();
+	}
+	slc_log();
+	apple_cpuidle_system_suspend_log();
 	if (soc_nsaved)
 		pr_info("soc_sleep: back, restoring %d settings\n", soc_nsaved);
 	soc_restore();
+	soc_plan_free();
+	disp_cycle_restore();
 	deep_filter_log();
 	if (deep_wake_s)
 		pr_info("deep_wake_s: deadline %s\n", dw_fired ? "reached" : "not reached at wake");
@@ -2354,6 +3420,11 @@ static int apple_sleep_probe(struct platform_device *pdev)
 	wake_mask_va = ioremap_np(WAKE_MASK_PHYS, WAKE_MASK_OFF + 4 * WAKE_MASK_N);
 	wake_tbl_va = ioremap_np(WAKE_TBL_PHYS, WAKE_TBL_OFF + 0x10 * WAKE_TBL_N);
 	wake_log("at probe");
+	if (wg_map())
+		dev_warn(&pdev->dev, "wake_gpio: cannot map the GPIO blocks\n");
+	else
+		wg_log("at probe");
+	as_wd0_va = ioremap_np(AS_WDT_PHYS, 0x10);
 
 	as_find_mask_irqs();
 	{
@@ -2425,6 +3496,15 @@ static void wake_unmap(void)
 	if (wake_tbl_va)
 		iounmap(wake_tbl_va);
 	wake_mask_va = wake_tbl_va = NULL;
+	if (as_wd0_va)
+		iounmap(as_wd0_va);
+	as_wd0_va = NULL;
+	wg_restore();
+	for (int i = 0; i < 2; i++) {
+		if (wg_va[i])
+			iounmap(wg_va[i]);
+		wg_va[i] = NULL;
+	}
 }
 
 static void apple_sleep_remove(struct platform_device *pdev)

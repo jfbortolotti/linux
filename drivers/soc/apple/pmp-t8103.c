@@ -44,6 +44,8 @@
 #include <linux/of.h>
 #include <linux/platform_device.h>
 #include <linux/pm.h>
+#include <linux/reset.h>
+#include <linux/slab.h>
 #include <linux/soc/apple/rtkit.h>
 #include <linux/unaligned.h>
 
@@ -100,7 +102,11 @@ struct apple_pmp {
 	u64 cfg_ack_msg, sync_ack_msg;
 	struct mutex lock; /* one sync request at a time */
 	void __iomem *doorbell;
-	bool ready, asleep, stopped, iop_idle;
+	void __iomem *mbox;
+	struct reset_control *reset;
+	void *buf_boot;		/* the buffer as handed to the PMP at boot, for wake_reboot */
+	bool ready, asleep, stopped, iop_idle, i2a_set;
+	u32 i2a_saved;
 	unsigned int wakes;
 	struct debugfs_blob_wrapper buf_blob;
 	struct dentry *dbg;
@@ -119,6 +125,33 @@ MODULE_PARM_DESC(sleep_iop, "with sleep=1: also SetIOPPower 0x201 (macOS; no kno
 static bool stop_cpu;
 module_param(stop_cpu, bool, 0644);
 MODULE_PARM_DESC(stop_cpu, "with sleep=1 sleep_iop=1: also stop the PMP CPU (RUN=0) while asleep, as macOS");
+/*
+ * stop_i2a (review C1, 2026-11-20): HV traces 16 and 17 both write ASC mailbox +0x8114 (I2A_CONTROL)
+ * = 0x22200 right before CPU_CONTROL RUN=0, from a different routine than the message send. Meaning
+ * unknown (bit 17 is the I2A EMPTY flag, bits 13/9 not documented). Saved and written back at resume.
+ */
+static bool stop_i2a;
+module_param(stop_i2a, bool, 0644);
+MODULE_PARM_DESC(stop_i2a, "with stop_cpu: write ASC +0x8114 (I2A_CONTROL) = 0x22200 before RUN=0, as macOS; restored at resume");
+/*
+ * +0x8114 is relative to the ASC base, but the DT "asc" region is only 0x4000 long: the register
+ * lives in the mailbox block (pmp_mbox, 0x23bc08000), at +0x114 there. The tracer decodes the macOS
+ * write as OUTBOX_CTRL EMPTY=1 RPTR=WPTR=2 ENABLE=0, i.e. the live value with ENABLE (bit 0)
+ * cleared (boot value 0x20001). So: read, clear ENABLE, write; ENABLE set back at resume.
+ */
+/*
+ * wake_reboot (step 2, 2026-11-20): no macOS trace covers a wake (HV tracing ends in the deep
+ * sleep; a real wake brings the PMP back through a SoC power-up). On Linux the PMP is still powered
+ * at resume and in place it answers nothing after RUN=1 from IOP 0x201. So restart it from scratch,
+ * as nvme-apple does with ANS (also iBoot-loaded): PS reset, rtkit reinit, buffer back to its boot
+ * copy, then the probe-time boot handshake.
+ */
+static bool wake_reboot;
+module_param(wake_reboot, bool, 0644);
+MODULE_PARM_DESC(wake_reboot, "with stop_cpu: at resume reset the PMP (PS reset) and redo the boot handshake");
+#define PMP_MBOX_PHYS		0x23bc08000ULL
+#define MBOX_I2A_CONTROL	0x114
+#define MBOX_CTRL_ENABLE	BIT(0)
 
 static bool verbose = true;
 module_param(verbose, bool, 0644);
@@ -390,6 +423,7 @@ static int pmp_probe(struct platform_device *pdev)
 		return PTR_ERR(pmp->asc);
 	/* experiment: not in the DT; Apple MMIO must be non-posted */
 	pmp->doorbell = ioremap_np(PMP_DOORBELL_PHYS, 4);
+	pmp->mbox = ioremap_np(PMP_MBOX_PHYS, 0x200);
 
 	ret = dma_set_mask_and_coherent(dev, DMA_BIT_MASK(32));
 	if (ret)
@@ -413,6 +447,11 @@ static int pmp_probe(struct platform_device *pdev)
 		ret = dev_err_probe(dev, PTR_ERR(pmp->rtk), "RTKit init failed\n");
 		goto err_unmap;
 	}
+
+	pmp->reset = devm_reset_control_get_optional_exclusive(dev, NULL);
+	if (IS_ERR(pmp->reset))
+		pmp->reset = NULL;
+	pmp->buf_boot = devm_kmemdup(dev, pmp->buf, PMP_BUF_SIZE, GFP_KERNEL);
 
 	ret = pmp_start(pmp);
 	if (ret)
@@ -442,6 +481,8 @@ static void pmp_remove(struct platform_device *pdev)
 		apple_rtkit_idle(pmp->rtk);
 	if (pmp->doorbell)
 		iounmap(pmp->doorbell);
+	if (pmp->mbox)
+		iounmap(pmp->mbox);
 	/* the firmware keeps the buffer and PIO windows: keep them mapped */
 }
 
@@ -486,6 +527,14 @@ static int pmp_suspend_late(struct device *dev)
 	/* macOS: the CPU is stopped right after the IOP 0x201 ack */
 	ret = readl_poll_timeout(pmp->asc + ASC_CPU_STATUS, status,
 				 status & ASC_CPU_STATUS_IDLE, 100, 100000);
+	if (stop_i2a && pmp->mbox) {
+		pmp->i2a_saved = readl(pmp->mbox + MBOX_I2A_CONTROL);
+		writel(pmp->i2a_saved & ~MBOX_CTRL_ENABLE, pmp->mbox + MBOX_I2A_CONTROL);
+		dev_info(dev, "I2A_CONTROL %#x -> %#x (reads %#x; macOS 0x20001 -> 0x22200)\n",
+			 pmp->i2a_saved, pmp->i2a_saved & (u32)~MBOX_CTRL_ENABLE,
+			 readl(pmp->mbox + MBOX_I2A_CONTROL));
+		pmp->i2a_set = true;
+	}
 	writel(readl(pmp->asc + ASC_CPU_CONTROL) & ~ASC_CPU_CONTROL_RUN,
 	       pmp->asc + ASC_CPU_CONTROL);
 	pmp->stopped = true;
@@ -502,6 +551,39 @@ static int pmp_resume_early(struct device *dev)
 	if (!pmp->asleep)
 		return 0;
 	pmp->asleep = false;
+	if (pmp->i2a_set) {
+		pmp->i2a_set = false;
+		writel(readl(pmp->mbox + MBOX_I2A_CONTROL) | (pmp->i2a_saved & MBOX_CTRL_ENABLE),
+		       pmp->mbox + MBOX_I2A_CONTROL);
+		dev_info(dev, "I2A_CONTROL ENABLE back (reads %#x, was %#x)\n",
+			 readl(pmp->mbox + MBOX_I2A_CONTROL), pmp->i2a_saved);
+	}
+	if (pmp->stopped && wake_reboot) {
+		pmp->stopped = false;
+		if (!pmp->reset || !pmp->buf_boot) {
+			dev_err(dev, "wake_reboot: no %s (PMP off until reboot)\n",
+				pmp->reset ? "boot buffer copy" : "reset in the DT");
+			return 0;
+		}
+		dev_info(dev, "wake_reboot: CPU_CONTROL %#x CPU_STATUS %#x, resetting\n",
+			 readl(pmp->asc + ASC_CPU_CONTROL), readl(pmp->asc + ASC_CPU_STATUS));
+		ret = reset_control_assert(pmp->reset);
+		if (!ret)
+			ret = apple_rtkit_reinit(pmp->rtk);
+		if (!ret)
+			ret = reset_control_deassert(pmp->reset);
+		if (ret) {
+			dev_err(dev, "wake_reboot: reset/reinit failed: %d (PMP off until reboot)\n", ret);
+			return 0;
+		}
+		memcpy(pmp->buf, pmp->buf_boot, PMP_BUF_SIZE);
+		ret = pmp_start(pmp);
+		if (ret) {
+			dev_err(dev, "wake_reboot: boot failed: %d (PMP off until reboot)\n", ret);
+			return 0;
+		}
+		goto awake;
+	}
 	if (pmp->stopped) {
 		pmp->stopped = false;
 		writel(readl(pmp->asc + ASC_CPU_CONTROL) | ASC_CPU_CONTROL_RUN,
@@ -529,6 +611,7 @@ static int pmp_resume_early(struct device *dev)
 		return 0;
 	}
 	pmp->ready = true;
+awake:
 	pmp->wakes++;
 	/*
 	 * The display front end is on again before any driver resumes (and a DCP restarted by

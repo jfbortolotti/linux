@@ -1313,6 +1313,7 @@
 			mboxes = <&pmp_mbox>;
 			iommus = <&pmp_dart 0 0x0 0x4000 0x0 0xbfffc000>;
 			power-domains = <&ps_pmp>;
+			resets = <&ps_pmp>;
 			/* ADT /arm-io/pmp reg[3..]: offsets from 0x200000000, 0 = unused slot */
 			apple,pio-ranges =
 				<0x00024000 0x4000>, <0x00064000 0x4000>, <0x000a4000 0x4000>,
