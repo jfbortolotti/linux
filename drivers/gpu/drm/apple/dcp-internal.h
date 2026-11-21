@@ -145,6 +145,7 @@ struct apple_dcp {
 	dma_addr_t shmem_iova;
 	/* apple-s2idle: DCP fully shut down in suspend (DISP0_CPU0 off), restarted at resume */
 	bool full_off;
+	bool warm_off;	/* full_suspend, full_warm: stopped the macOS way, firmware state kept */
 	/* pristine __DATA image (cold_data firmware), written to dcp_data before a cold restart */
 	void *cold_data;
 	size_t cold_data_len;

@@ -1346,9 +1346,9 @@ static void dcp_platform_shutdown(struct platform_device *pdev)
  * for the IOMFB boot sequence; DRM resume then powers the display on and sets the mode, as at boot.
  * m1n1 does the same cold boot (src/dcp.c dcp_init) every chainload. Internal panel only.
  */
-static bool full_suspend;
+static bool full_suspend = true;
 module_param(full_suspend, bool, 0644);
-MODULE_PARM_DESC(full_suspend, "EXPERIMENTAL: shut the DCP down in system suspend and cold-restart it at resume");
+MODULE_PARM_DESC(full_suspend, "shut the DCP down in system suspend and restart it at resume (default Y; warm restart with full_warm=Y)");
 
 /*
  * A cold boot of the DCP firmware needs its writable __DATA as loaded by iBoot from the Mach-O:
@@ -1369,13 +1369,27 @@ static unsigned int cold_mode;
 module_param(cold_mode, uint, 0644);
 MODULE_PARM_DESC(cold_mode, "full_suspend restart: 0 cold_data + cold_keep, cold_clear; 1 all carve-outs from the probe snapshot (warm, as at bind); 2 cold_data + cold_keep, region57/94/95 from the snapshot");
 
+/*
+ * full_warm (2026-11-16, HV trace 13 display sleep 194.41 s / wake 211.20 s): stop and restart the
+ * DCP as macOS does, without a firmware reload. The firmware keeps its state in its DRAM
+ * carve-outs across the DISP0_CPU0 power cut and resumes from it (immediate HELLO, no D204).
+ * Stop: RTKit AP power 0x201, AFK suspend 0xa4 -> 0x87 on every started endpoint, IOP power 0x201
+ * (ack type 7), mailbox stopped, RUN=0. Restart: mailbox started, RUN=1, HELLO, EPMap acked with the
+ * bitmap and no STARTEP, the DCP reports IOP 0x20 by itself, AP power 0x20, AFK start 0xa3 -> 0x86.
+ * IOMFB is not shut down nor started again: DRM powers the display back as after a plain suspend.
+ * Not ported: macOS command A500 (16 bytes, unknown) sent right before the AP power 0x201.
+ */
+static bool full_warm = true;
+module_param(full_warm, bool, 0644);
+MODULE_PARM_DESC(full_warm, "full_suspend: macOS-style warm DCP stop/restart (firmware state kept, default Y); N = cold restart");
+
 static int dcp_pm_notify(struct notifier_block *nb, unsigned long action, void *data)
 {
 	struct apple_dcp *dcp = container_of(nb, struct apple_dcp, pm_nb);
 	const struct firmware *fw;
 	int ret;
 
-	if (action != PM_SUSPEND_PREPARE || !full_suspend || dcp->cold_data || cold_mode == 1 ||
+	if (action != PM_SUSPEND_PREPARE || !full_suspend || full_warm || dcp->cold_data || cold_mode == 1 ||
 	    !cold_data || !cold_data[0] || dcp->connector_type != DRM_MODE_CONNECTOR_eDP)
 		return NOTIFY_DONE;
 
@@ -1606,6 +1620,116 @@ static int dcp_full_shutdown(struct apple_dcp *dcp)
 	return 0;
 }
 
+static struct apple_dcp_afkep **dcp_afkeps(struct apple_dcp *dcp, int *n)
+{
+	static struct apple_dcp_afkep *eps[5];
+
+	*n = 0;
+	if (dcp->systemep)
+		eps[(*n)++] = dcp->systemep;
+	if (dcp->ibootep)
+		eps[(*n)++] = dcp->ibootep;
+	if (dcp->dcpavservep)
+		eps[(*n)++] = dcp->dcpavservep;
+	if (dcp->avep)
+		eps[(*n)++] = dcp->avep;
+	if (dcp->dptxep)
+		eps[(*n)++] = dcp->dptxep;
+	return eps;
+}
+
+static void dcp_cpu_run(struct apple_dcp *dcp, bool run)
+{
+	u32 v = readl_relaxed(dcp->coproc_reg + APPLE_DCP_COPROC_CPU_CONTROL);
+
+	if (run)
+		v |= APPLE_DCP_COPROC_CPU_CONTROL_RUN;
+	else
+		v &= ~APPLE_DCP_COPROC_CPU_CONTROL_RUN;
+	writel_relaxed(v, dcp->coproc_reg + APPLE_DCP_COPROC_CPU_CONTROL);
+}
+
+static int dcp_a500(struct apple_dcp *dcp)
+{
+	switch (dcp->fw_compat) {
+	case DCP_FIRMWARE_V_12_3:
+		return iomfb_a500_v12_3(dcp);
+	case DCP_FIRMWARE_V_13_5:
+		return iomfb_a500_v13_3(dcp);
+	case DCP_FIRMWARE_V_14_7:
+		return iomfb_a500_v14_7_0(dcp);
+	default:
+		return -EOPNOTSUPP;
+	}
+}
+
+static int dcp_warm_shutdown(struct apple_dcp *dcp)
+{
+	struct apple_dcp_afkep **eps;
+	int i, n, ret;
+
+	/* macOS order (HV trace 14): setPowerState(0), A500(0), SetAPPower 0x201 */
+	ret = dcp_a500(dcp);
+	dev_info(dcp->dev, "full_warm: A500(0): %d\n", ret);
+	eps = dcp_afkeps(dcp, &n);
+	ret = apple_rtkit_set_ap_power(dcp->rtk, 0x201);
+	if (ret) {
+		dev_err(dcp->dev, "full_warm: AP power 0x201: %d, keeping the DCP powered\n", ret);
+		return ret;
+	}
+	for (i = 0; i < n; i++) {
+		ret = afk_suspend(eps[i]);
+		dev_info(dcp->dev, "full_warm: AFK ep %#x suspend: %d\n", eps[i]->endpoint, ret);
+		if (ret) {
+			/* a START on a non-suspended ep asserts the DCP at restart */
+			while (--i >= 0)
+				afk_resume(eps[i]);
+			apple_rtkit_set_ap_power(dcp->rtk, 0x20);
+			dev_err(dcp->dev, "full_warm: keeping the DCP powered\n");
+			return ret;
+		}
+	}
+	ret = apple_rtkit_warm_stop(dcp->rtk);
+	if (ret) {
+		dev_err(dcp->dev, "full_warm: IOP power 0x201: %d, keeping the DCP powered\n", ret);
+		for (i = 0; i < n; i++)
+			afk_resume(eps[i]);
+		apple_rtkit_set_ap_power(dcp->rtk, 0x20);
+		return ret;
+	}
+	dcp_cpu_run(dcp, false);
+	dcp->full_off = true;
+	dcp->warm_off = true;
+	dev_info(dcp->dev, "full_warm: DCP stopped (IOP 0x201, RUN=0)\n");
+	return 0;
+}
+
+static int dcp_warm_restart(struct apple_dcp *dcp)
+{
+	struct apple_dcp_afkep **eps;
+	int i, n, ret;
+
+	dcp->full_off = false;
+	dcp->warm_off = false;
+	ret = apple_rtkit_warm_prepare(dcp->rtk);
+	if (ret)
+		dev_err(dcp->dev, "full_warm: mailbox start: %d\n", ret);
+	dcp_cpu_run(dcp, true);
+	ret = apple_rtkit_boot(dcp->rtk);
+	if (ret) {
+		dev_err(dcp->dev, "full_warm: RTKit warm boot failed: %d\n", ret);
+		return ret;
+	}
+	eps = dcp_afkeps(dcp, &n);
+	for (i = 0; i < n; i++) {
+		ret = afk_resume(eps[i]);
+		if (ret)
+			dev_err(dcp->dev, "full_warm: AFK ep %#x start: %d\n", eps[i]->endpoint, ret);
+	}
+	dev_info(dcp->dev, "full_warm: DCP restarted (active %d)\n", dcp->active);
+	return 0;
+}
+
 static int dcp_full_restart(struct apple_dcp *dcp)
 {
 	struct platform_device *pdev = to_platform_device(dcp->dev);
@@ -1682,7 +1806,10 @@ static int dcp_platform_suspend(struct device *dev)
 		dev_info(dcp->dev, "full_suspend: crashed DCP stopped, restart at resume\n");
 		return 0;
 	}
-	if (full_suspend && dcp->connector_type == DRM_MODE_CONNECTOR_eDP &&
+	if (full_suspend && full_warm && dcp->connector_type == DRM_MODE_CONNECTOR_eDP &&
+	    !dcp_warm_shutdown(dcp))
+		return 0;	/* no wakeup path: genpd powers DISP0_CPU0 off */
+	if (full_suspend && !full_warm && dcp->connector_type == DRM_MODE_CONNECTOR_eDP &&
 	    !dcp_full_shutdown(dcp))
 		return 0;	/* no wakeup path: genpd powers DISP0_CPU0 off */
 
@@ -1700,7 +1827,9 @@ static int dcp_platform_resume(struct device *dev)
 {
 	struct apple_dcp *dcp = dev_get_drvdata(dev);
 
-	if (dcp->full_off)
+	if (dcp->warm_off)
+		dcp_warm_restart(dcp);
+	else if (dcp->full_off)
 		dcp_full_restart(dcp);
 
 	if (dcp->hdmi_hpd_irq)

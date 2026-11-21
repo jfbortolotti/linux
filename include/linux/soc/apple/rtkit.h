@@ -150,6 +150,15 @@ int apple_rtkit_idle(struct apple_rtkit *rtk);
 int apple_rtkit_set_ap_power(struct apple_rtkit *rtk, unsigned int state);
 
 /*
+ * apple-s2idle: macOS-style warm stop/restart of a co-processor whose firmware state stays in DRAM
+ * across a power cut (DCP display sleep, HV trace 13). warm_stop: IOP power 0x201 (IDLE), mailbox
+ * stopped, buffers and endpoints kept. warm_prepare: mailbox started again, the next EPMap is
+ * acked without starting the system endpoints; then set the CPU RUN bit and apple_rtkit_boot().
+ */
+int apple_rtkit_warm_stop(struct apple_rtkit *rtk);
+int apple_rtkit_warm_prepare(struct apple_rtkit *rtk);
+
+/*
  * Checks if RTKit is running and ready to handle messages.
  */
 bool apple_rtkit_is_running(struct apple_rtkit *rtk);

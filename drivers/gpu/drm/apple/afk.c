@@ -34,6 +34,8 @@ enum rbep_msg_type {
 	RBEP_RECV = 0x85,
 	RBEP_SHUTDOWN = 0xc0,
 	RBEP_SHUTDOWN_ACK = 0xc1,
+	RBEP_SUSPEND = 0xa4,		/* macOS DCP display sleep (HV trace 13) */
+	RBEP_SUSPEND_ACK = 0x87,
 };
 
 #define BLOCK_SHIFT 6
@@ -77,6 +79,7 @@ struct apple_dcp_afkep *afk_init(struct apple_dcp *dcp, u32 endpoint,
 
 	init_completion(&afkep->started);
 	init_completion(&afkep->stopped);
+	init_completion(&afkep->suspended);
 	spin_lock_init(&afkep->lock);
 
 	return afkep;
@@ -97,6 +100,30 @@ void afk_shutdown(struct apple_dcp_afkep *afkep)
 	}
 
 	destroy_workqueue(afkep->wq);
+}
+
+/*
+ * apple-s2idle warm DCP stop/restart (macOS display sleep, HV trace 13): the endpoint keeps its
+ * ring buffers and services; suspend 0xa4 -> 0x87 before the DCP goes to IOP power 0x201, and
+ * start 0xa3 -> 0x86 once the warm-restarted firmware has said HELLO.
+ */
+int afk_suspend(struct apple_dcp_afkep *ep)
+{
+	reinit_completion(&ep->suspended);
+	afk_send(ep, FIELD_PREP(RBEP_TYPE, RBEP_SUSPEND));
+	if (!wait_for_completion_timeout(&ep->suspended, msecs_to_jiffies(1000)))
+		return -ETIMEDOUT;
+	flush_workqueue(ep->wq);
+	return 0;
+}
+
+int afk_resume(struct apple_dcp_afkep *ep)
+{
+	reinit_completion(&ep->started);
+	afk_send(ep, FIELD_PREP(RBEP_TYPE, RBEP_START));
+	if (!wait_for_completion_timeout(&ep->started, msecs_to_jiffies(1000)))
+		return -ETIMEDOUT;
+	return 0;
 }
 
 int afk_start(struct apple_dcp_afkep *ep)
@@ -696,6 +723,10 @@ static void afk_receive_message_worker(struct work_struct *work_)
 
 	case RBEP_SHUTDOWN_ACK:
 		complete_all(&work->ep->stopped);
+		break;
+
+	case RBEP_SUSPEND_ACK:
+		complete_all(&work->ep->suspended);
 		break;
 
 	case RBEP_GETBUF:

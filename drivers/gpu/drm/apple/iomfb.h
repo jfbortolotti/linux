@@ -166,6 +166,7 @@ enum dcpep_method {
 	iomfbep_last_client_close,
 	iomfbep_abort_swaps_dcp,
 	iomfbep_set_matrix,
+	iomfbep_a500_pre_ap_off,
 	dcpep_num_methods
 };
 

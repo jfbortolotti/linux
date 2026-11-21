@@ -173,11 +173,23 @@ static void apple_rtkit_management_rx_epmap(struct apple_rtkit *rtk, u64 msg)
 		reply |= APPLE_RTKIT_MGMT_EPMAP_LAST;
 	else
 		reply |= APPLE_RTKIT_MGMT_EPMAP_REPLY_MORE;
+	/* warm restart: macOS echoes the bitmap in the ack (trace 13: 0x008000000000051f) */
+	if (rtk->warm)
+		reply |= FIELD_PREP(APPLE_RTKIT_MGMT_EPMAP_BITMAP, bitmap);
 
 	apple_rtkit_management_send(rtk, APPLE_RTKIT_MGMT_EPMAP_REPLY, reply);
 
 	if (!(msg & APPLE_RTKIT_MGMT_EPMAP_LAST))
 		return;
+
+	if (rtk->warm) {
+		/* the system endpoints and their buffers survived: macOS sends no STARTEP */
+		dev_info(rtk->dev, "RTKit: warm restart, endpoints kept\n");
+		rtk->warm = false;
+		rtk->boot_result = 0;
+		complete_all(&rtk->epmap_completion);
+		return;
+	}
 
 	for_each_set_bit(ep, rtk->endpoints, APPLE_RTKIT_APP_ENDPOINT_START) {
 		switch (ep) {
@@ -613,8 +625,16 @@ int apple_rtkit_send_message(struct apple_rtkit *rtk, u8 ep, u64 message,
 		return -EINVAL;
 	}
 
+	/*
+	 * Warm stop (macOS order, HV trace 14): after SetAPPower 0x201 the
+	 * AP still sends AFK 0xa4 (suspend) to each endpoint, before
+	 * SetIOPPower 0x201. Allow app endpoint messages in that window.
+	 */
 	if (ep >= APPLE_RTKIT_APP_ENDPOINT_START &&
-	    !apple_rtkit_is_running(rtk)) {
+	    !apple_rtkit_is_running(rtk) &&
+	    !(!rtk->crashed &&
+	      (rtk->iop_power_state & 0xff) == APPLE_RTKIT_PWR_STATE_ON &&
+	      rtk->ap_power_state == APPLE_RTKIT_PWR_STATE_IDLE)) {
 		dev_warn(rtk->dev,
 			 "RTKit: Endpoint 0x%02x is not running, cannot send message\n", ep);
 		return -EINVAL;
@@ -900,6 +920,31 @@ int apple_rtkit_idle(struct apple_rtkit *rtk)
 	return 0;
 }
 EXPORT_SYMBOL_GPL(apple_rtkit_idle);
+
+int apple_rtkit_warm_stop(struct apple_rtkit *rtk)
+{
+	int ret;
+
+	ret = apple_rtkit_set_iop_power_state(rtk, APPLE_RTKIT_PWR_STATE_IDLE);
+	if (ret)
+		return ret;
+
+	apple_mbox_stop(rtk->mbox);
+	flush_workqueue(rtk->wq);
+	reinit_completion(&rtk->epmap_completion);
+	reinit_completion(&rtk->iop_pwr_ack_completion);
+	reinit_completion(&rtk->ap_pwr_ack_completion);
+	rtk->warm = true;
+	return 0;
+}
+EXPORT_SYMBOL_GPL(apple_rtkit_warm_stop);
+
+int apple_rtkit_warm_prepare(struct apple_rtkit *rtk)
+{
+	rtk->warm = true;
+	return apple_mbox_start(rtk->mbox);
+}
+EXPORT_SYMBOL_GPL(apple_rtkit_warm_prepare);
 
 int apple_rtkit_quiesce(struct apple_rtkit *rtk)
 {

@@ -31,6 +31,9 @@ static const struct dcp_method_entry dcp_methods[dcpep_num_methods] = {
 	IOMFB_METHOD("A466", dcpep_flush_supports_power),
 	IOMFB_METHOD("A467", iomfbep_abort_swaps_dcp),
 	IOMFB_METHOD("A472", dcpep_set_power_state),
+	/* unnamed; macOS 13.6 sends it (in: u32 0, out: none) after setPowerState(0),
+	 * right before RTKit SetAPPower 0x201 (HV trace 14, 2026-11-17) */
+	IOMFB_METHOD("A500", iomfbep_a500_pre_ap_off),
 };
 
 #define DCP_FW v13_3

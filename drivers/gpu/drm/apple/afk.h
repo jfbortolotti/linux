@@ -166,6 +166,7 @@ struct apple_dcp_afkep {
 
 	struct completion started;
 	struct completion stopped;
+	struct completion suspended;
 
 	void *bfr;
 	u16 bfr_tag;
@@ -191,6 +192,8 @@ struct apple_dcp_afkep *afk_init(struct apple_dcp *dcp, u32 endpoint,
 				 const struct apple_epic_service_ops *ops);
 int afk_start(struct apple_dcp_afkep *ep);
 void afk_shutdown(struct apple_dcp_afkep *ep);
+int afk_suspend(struct apple_dcp_afkep *ep);
+int afk_resume(struct apple_dcp_afkep *ep);
 int afk_receive_message(struct apple_dcp_afkep *ep, u64 message);
 int afk_send_epic(struct apple_dcp_afkep *ep, u32 channel, u16 tag,
 		  enum epic_type etype, enum epic_category ecat, u8 stype,

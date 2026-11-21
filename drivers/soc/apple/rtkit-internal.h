@@ -39,6 +39,7 @@ struct apple_rtkit {
 	unsigned int iop_power_state;
 	unsigned int ap_power_state;
 	bool crashed;
+	bool warm;	/* apple-s2idle: next HELLO/EPMap is a warm restart (state kept) */
 
 	DECLARE_BITMAP(endpoints, APPLE_RTKIT_MAX_ENDPOINTS);
 

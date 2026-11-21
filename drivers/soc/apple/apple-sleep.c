@@ -1846,6 +1846,84 @@ static void dw_arm(u64 deadline)
 	isb();
 }
 
+/*
+ * deep_wdt_s=N (test aid for cpuidle_apple.ecluster_deep, 2026-11-15): if the E cluster in
+ * ACC_OVRD_DEEP_SLEEP never wakes, nothing is left running to notice. Arm the AON watchdog
+ * (0x23d2b0000, as apple_wdt / m1n1's wake beacon: +0x10 count, +0x14 bite, +0x1c ctrl bit 2
+ * reset) to reset the SoC N s after the deep entry; disarmed again at wake. apple_wdt is already
+ * suspended by then (it re-arms itself at resume if it was running). 24 MHz, max 178 s.
+ */
+#define AS_WDT_PHYS		0x23d2b0000ULL
+#define AS_WDT_CUR		0x10
+#define AS_WDT_BITE		0x14
+#define AS_WDT_CTRL		0x1c
+#define AS_WDT_RESET_EN		BIT(2)
+static unsigned int deep_wdt_s;
+module_param(deep_wdt_s, uint, 0644);
+MODULE_PARM_DESC(deep_wdt_s, "deep test aid: AON watchdog resets the SoC N s (max 178) after the deep entry if it has not woken (0 = off)");
+static void __iomem *as_wdt_va;
+static u32 as_wdt_saved[3];	/* cur, bite, ctrl */
+static bool as_wdt_armed;
+
+static void as_wdt_arm(void)
+{
+	u64 bite;
+
+	if (!deep_wdt_s)
+		return;
+	if (!as_wdt_va)
+		as_wdt_va = ioremap_np(AS_WDT_PHYS, 0x20);
+	if (!as_wdt_va)
+		return;
+	bite = min_t(u64, (u64)deep_wdt_s * 24000000ULL, U32_MAX);
+	as_wdt_saved[0] = readl(as_wdt_va + AS_WDT_CUR);
+	as_wdt_saved[1] = readl(as_wdt_va + AS_WDT_BITE);
+	as_wdt_saved[2] = readl(as_wdt_va + AS_WDT_CTRL);
+	writel(0, as_wdt_va + AS_WDT_CUR);
+	writel(bite, as_wdt_va + AS_WDT_BITE);
+	writel(AS_WDT_RESET_EN, as_wdt_va + AS_WDT_CTRL);
+	as_wdt_armed = true;
+}
+
+static void as_wdt_disarm(void)
+{
+	u32 cur;
+
+	if (!as_wdt_armed)
+		return;
+	as_wdt_armed = false;
+	cur = readl(as_wdt_va + AS_WDT_CUR);
+	writel(0, as_wdt_va + AS_WDT_CTRL);
+	writel(as_wdt_saved[1], as_wdt_va + AS_WDT_BITE);
+	writel(0, as_wdt_va + AS_WDT_CUR);
+	writel(as_wdt_saved[2], as_wdt_va + AS_WDT_CTRL);
+	pr_info("deep_wdt_s: disarmed after %u ms (ctrl back to %#x)\n", cur / 24000, as_wdt_saved[2]);
+}
+
+/*
+ * Keep the safety net through device resume (2026-11-16: pcie-apple power_off_gp froze in
+ * resume_noirq, after the deep wake had already disarmed it): at wake the count restarts with the
+ * full deep_wdt_s, the watchdog is disarmed only at PM_POST_SUSPEND, once every device has resumed.
+ */
+static void as_wdt_rearm_for_resume(void)
+{
+	if (!as_wdt_armed)
+		return;
+	writel(0, as_wdt_va + AS_WDT_CUR);
+	pr_info("deep_wdt_s: woken, kept armed (%u s) until the end of resume\n", deep_wdt_s);
+}
+
+static int as_pm_notify(struct notifier_block *nb, unsigned long action, void *data)
+{
+	if (action == PM_POST_SUSPEND)
+		as_wdt_disarm();
+	return NOTIFY_DONE;
+}
+
+static struct notifier_block as_pm_nb = {
+	.notifier_call = as_pm_notify,
+};
+
 static int as_suspend_enter(suspend_state_t state)
 {
 	u64 dw_ctl = 0, dw_cval = 0, deadline = 0;
@@ -1859,6 +1937,7 @@ static int as_suspend_enter(suspend_state_t state)
 		deadline = df_t0 + (u64)deep_wake_s * read_sysreg(cntfrq_el0);
 	}
 	irq_snap_take();
+	as_wdt_arm();
 	df_nlog = 0;
 	df_lost = 0;
 	df_filtered = 0;
@@ -1949,6 +2028,7 @@ static void deep_filter_log(void)
 
 static void as_suspend_wake(void)
 {
+	as_wdt_rearm_for_resume();
 	if (soc_nsaved)
 		pr_info("soc_sleep: back, restoring %d settings\n", soc_nsaved);
 	soc_restore();
@@ -2312,6 +2392,7 @@ static int apple_sleep_probe(struct platform_device *pdev)
 	s2idle_set_ops(&as_s2idle_ops);
 	if (deep)
 		suspend_set_ops(&as_suspend_ops);
+	register_pm_notifier(&as_pm_nb);
 	dev_info(dev, "s2idle ops registered: %d power states, lid %s (open level %d, IRQ %d), lp %#x; deep %s, %d mailbox IRQs masked in deep sleep\n",
 		 as.ndoms, as.lid ? "gpio" : "none", as.lid_open_level, as.lid_irq, lp,
 		 deep ? "registered" : "off", as.nmask_irqs);
@@ -2348,6 +2429,8 @@ static void wake_unmap(void)
 
 static void apple_sleep_remove(struct platform_device *pdev)
 {
+	unregister_pm_notifier(&as_pm_nb);
+	as_wdt_disarm();
 	wake_unmap();
 	if (deep)
 		suspend_set_ops(NULL);

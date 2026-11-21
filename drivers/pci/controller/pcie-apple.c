@@ -26,10 +26,12 @@
 #include <linux/irqchip/irq-msi-lib.h>
 #include <linux/irqdomain.h>
 #include <linux/list.h>
+#include <linux/mfd/syscon.h>
 #include <linux/module.h>
 #include <linux/msi.h>
 #include <linux/of_irq.h>
 #include <linux/pci-ecam.h>
+#include <linux/regmap.h>
 #include <linux/suspend.h>
 #include <linux/workqueue.h>
 
@@ -72,6 +74,27 @@ static bool power_off_perst = true;
 module_param(power_off_perst, bool, 0644);
 MODULE_PARM_DESC(power_off_perst, "power_off_suspend: assert PERST# before cutting PWREN (default Y)");
 
+/*
+ * power_off_gp (2026-11-15, untested): when every port of the controller is powered off for
+ * suspend (power_off_suspend), also shut the controller down as m1n1 pcie_shutdown() does
+ * (ports: PERST + APPCLK off; shared PHY: RESET, CLK1REQ, CLK0REQ cleared, which drops the last
+ * refclk request so PCIE_REF can clock-gate as in macOS), mask 0x1, and power the APCIE_GP
+ * domain off (PMGR PS target 0, auto off; macOS sleep: 1000230f), mask 0x2 (needs 0x1).
+ * APCIE_GP is "apple,always-on" for genpd (it has no cold init), so the PS register is written
+ * here directly through the PMGR syscon. At resume_noirq the domain is put back and the
+ * controller is cold-initialised as m1n1 pcie_init_controller() (t8103 path): axi2af, common
+ * and PHY tunables, PHY clock requests, PHYIF run, PHY fuses, PHY-IP PLL/AUSPMA tunables, port
+ * config tunables, then the usual port power-up with the DWC DBI tunables + link speed/width
+ * before link training. The ADT tunables come from m1n1 (kboot dt_set_apcie_tunables(),
+ * properties apple,tunable-* on the pcie node and its port nodes, fuses precomputed); without
+ * them (older m1n1) power_off_gp is refused at probe ("cold init data missing").
+ * The DARTs share APCIE_GP: apple-dart restores TTBR/TCR in its own resume (DART tunables
+ * from iBoot, offset 0x60, are not re-applied).
+ */
+static unsigned int power_off_gp = 1;
+module_param(power_off_gp, uint, 0644);
+MODULE_PARM_DESC(power_off_gp, "power_off_suspend: 0x1 controller + shared PHY shutdown (PCIE_REF), 0x2 + APCIE_GP domain off; cold re-init at resume (default 1: 16.4 vs 18.1 mA, 2026-11-16)");
+
 /* T8103 (original M1) and related SoCs */
 #define CORE_RC_PHYIF_CTL		0x00024
 #define   CORE_RC_PHYIF_CTL_RUN		BIT(0)
@@ -85,6 +108,33 @@ MODULE_PARM_DESC(power_off_perst, "power_off_suspend: assert PERST# before cutti
 #define   CORE_FABRIC_STAT_MASK		0x001F001F
 
 #define CORE_PHY_DEFAULT_BASE(port)	(0x84000 + 0x4000 * (port))
+/* shared PHY (ADT apcie reg[2]) and PHY IP (reg[3]) inside the "rc" window, t8103 */
+#define CORE_PHY_COMMON			0x80000
+#define   PHY_CTRL_CLK0REQ		BIT(0)
+#define   PHY_CTRL_CLK1REQ		BIT(1)
+#define   PHY_CTRL_CLK0ACK		BIT(2)
+#define   PHY_CTRL_CLK1ACK		BIT(3)
+#define   PHY_CTRL_RESET		BIT(7)
+
+/* DesignWare core registers in the root port config space (m1n1 pcie.c) */
+#define DWC_DBI_PORT_LINK_CONTROL	0x710
+#define   DWC_DBI_PORT_LINK_MODE	GENMASK(21, 16)
+#define DWC_DBI_LINK_WIDTH_SPEED_CTL	0x80c
+#define   DWC_DBI_LINK_WIDTH		GENMASK(12, 8)
+#define   DWC_DBI_SPEED_CHANGE		BIT(17)
+#define DWC_DBI_RO_WR			0x8bc
+#define   DWC_DBI_RO_WR_EN		BIT(0)
+#define RP_PCIE_CAP			0x70
+#define   RP_LNKCAP_SLS			GENMASK(3, 0)
+#define   RP_LNKCAP_MLW			GENMASK(9, 4)
+#define   RP_LNKCAP2_SLS		GENMASK(6, 1)
+#define   RP_LNKCTL2_TLS		GENMASK(3, 0)
+
+/* PMGR PS register (drivers/pmdomain/apple/pmgr-pwrstate.c) */
+#define PS_AUTO_ENABLE			BIT(28)
+#define PS_FLAGS			(BIT(9) | BIT(8))
+#define PS_ACTUAL			GENMASK(7, 4)
+#define PS_TARGET			GENMASK(3, 0)
 
 #define PHY_LANE_CFG			0x00000
 #define   PHY_LANE_CFG_REFCLK0REQ	BIT(0)
@@ -230,6 +280,19 @@ struct apple_pcie {
 	struct irq_fwspec	fwspec;
 	u32			nvecs;
 	struct notifier_block	pm_nb;
+	/* power_off_gp */
+	bool			cold_ok;	/* m1n1 tunables found, PS registers located */
+	bool			ctrl_off;	/* controller shut down this suspend */
+	bool			gp_off;		/* APCIE_GP powered off this suspend */
+	void __iomem		*axi;
+	struct regmap		*pmgr;
+	u32			ps_gp, ps_apcie, ps_ref;	/* PS register offsets */
+	u32			ps_gp_saved;
+	struct apple_pcie_tun {
+		const char	*name;
+		u32		n;		/* entries */
+		u32		*v;		/* offset, mask, value */
+	}			tun_axi2af, tun_common, tun_phy, tun_fuses, tun_pll, tun_auspma;
 };
 
 struct apple_pcie_port {
@@ -252,6 +315,11 @@ struct apple_pcie_port {
 	bool			removed;	/* devices gone, rescan owed */
 	bool			powered_off;
 	bool			refclk_off;
+	bool			cold;		/* power_off_gp: redo the setup_port programming */
+	void __iomem		*cfg;		/* root port config space (DBI), 0x8000 */
+	u32			intmsk_saved;
+	u32			max_speed;	/* apple,max-link-speed from m1n1 (0: keep) */
+	struct apple_pcie_tun	tun_config, tun_rc, tun_gen3, tun_gen4;
 	struct work_struct	remove_work;
 	struct work_struct	rescan_work;
 };
@@ -732,6 +800,340 @@ static void apple_pcie_port_remove_work(struct work_struct *work)
 	dev_info(port->pcie->dev, "%pOF: devices removed for suspend\n", port->np);
 }
 
+/* ---- power_off_gp: controller shutdown, APCIE_GP off, cold re-init (m1n1 pcie.c port) ---- */
+
+static int apple_pcie_tun_parse(struct device *dev, struct device_node *np, const char *name,
+				size_t limit, struct apple_pcie_tun *t)
+{
+	int n = of_property_count_u32_elems(np, name);
+	u32 i;
+
+	t->name = name;
+	t->n = 0;
+	if (n <= 0 || n % 3) {
+		dev_info(dev, "%pOF: %s: %s\n", np, name, n == -EINVAL ? "missing" : "malformed");
+		return -ENOENT;
+	}
+	t->v = devm_kmalloc_array(dev, n, sizeof(u32), GFP_KERNEL);
+	if (!t->v)
+		return -ENOMEM;
+	if (of_property_read_u32_array(np, name, t->v, n))
+		return -EINVAL;
+	for (i = 0; i < n; i += 3) {
+		if (t->v[i] % 4 || t->v[i] > limit - 4) {
+			dev_err(dev, "%pOF: %s: offset %#x outside %#zx\n", np, name, t->v[i], limit);
+			return -EINVAL;
+		}
+	}
+	t->n = n / 3;
+	return 0;
+}
+
+static void apple_pcie_tun_apply(struct apple_pcie *pcie, void __iomem *base,
+				 const struct apple_pcie_tun *t)
+{
+	u32 i;
+
+	for (i = 0; i < t->n; i++) {
+		u32 off = t->v[3 * i], mask = t->v[3 * i + 1], val = t->v[3 * i + 2];
+
+		writel_relaxed((readl_relaxed(base + off) & ~mask) | val, base + off);
+	}
+	dev_info(pcie->dev, "cold init: %s (%u)\n", t->name, t->n);
+}
+
+static u32 apple_pcie_ps(struct apple_pcie *pcie, u32 off)
+{
+	u32 v = 0;
+
+	if (pcie->pmgr)
+		regmap_read(pcie->pmgr, off, &v);
+	return v;
+}
+
+static void apple_pcie_log_ps(struct apple_pcie *pcie, const char *when)
+{
+	if (!pcie->pmgr)
+		return;
+	dev_info(pcie->dev, "%s: APCIE_GP %08x APCIE %08x PCIE_REF %08x, PHY_CTRL %08x\n", when,
+		 apple_pcie_ps(pcie, pcie->ps_gp), apple_pcie_ps(pcie, pcie->ps_apcie),
+		 apple_pcie_ps(pcie, pcie->ps_ref),
+		 readl_relaxed(pcie->base + CORE_PHY_COMMON));
+}
+
+/* PS register offset of the pwrstate node np (reg = <offset 4>), regmap of its PMGR parent */
+static int apple_pcie_ps_node(struct apple_pcie *pcie, struct device_node *np, u32 *off)
+{
+	struct device_node *parent;
+	int ret = of_property_read_u32_index(np, "reg", 0, off);
+
+	if (ret || pcie->pmgr)
+		return ret;
+	parent = of_get_parent(np);
+	pcie->pmgr = syscon_node_to_regmap(parent);
+	of_node_put(parent);
+	if (IS_ERR(pcie->pmgr)) {
+		ret = PTR_ERR(pcie->pmgr);
+		pcie->pmgr = NULL;
+	}
+	return ret;
+}
+
+/* APCIE_GP = power-domains of the pcie node; APCIE = its parent; PCIE_REF = APCIE's 2nd parent */
+static int apple_pcie_find_ps(struct apple_pcie *pcie)
+{
+	struct device_node *gp, *apcie = NULL, *ref = NULL;
+	int ret = -ENODEV;
+
+	gp = of_parse_phandle(pcie->dev->of_node, "power-domains", 0);
+	if (gp)
+		apcie = of_parse_phandle(gp, "power-domains", 0);
+	if (apcie)
+		ref = of_parse_phandle(apcie, "power-domains", 1);
+	if (gp && apcie && ref &&
+	    !apple_pcie_ps_node(pcie, gp, &pcie->ps_gp) &&
+	    !apple_pcie_ps_node(pcie, apcie, &pcie->ps_apcie) &&
+	    !apple_pcie_ps_node(pcie, ref, &pcie->ps_ref))
+		ret = 0;
+	of_node_put(ref);
+	of_node_put(apcie);
+	of_node_put(gp);
+	return ret;
+}
+
+/* probe: everything the cold re-init needs, from m1n1 (kboot dt_set_apcie_tunables) */
+static void apple_pcie_cold_probe(struct apple_pcie *pcie)
+{
+	struct platform_device *pdev = to_platform_device(pcie->dev);
+	struct device_node *np = pcie->dev->of_node;
+	struct resource *res;
+	size_t rc_size;
+	int err = 0;
+
+	if (pcie->hw != &t8103_hw)
+		return;
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 1);
+	rc_size = res ? resource_size(res) : 0;
+	res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "axi");
+	if (res) {
+		/* non-posted, as every Apple MMIO (posted write = SError); never unmapped: no unbind */
+		pcie->axi = ioremap_np(res->start, resource_size(res));
+		if (!pcie->axi)
+			err = -ENOMEM;
+	} else {
+		dev_info(pcie->dev, "power_off_gp: no \"axi\" reg in the DT\n");
+		err = -ENOENT;
+	}
+	err = err ?: apple_pcie_tun_parse(pcie->dev, np, "apple,tunable-axi2af",
+					  res ? resource_size(res) : 0, &pcie->tun_axi2af);
+	err = err ?: apple_pcie_tun_parse(pcie->dev, np, "apple,tunable-common", rc_size,
+					  &pcie->tun_common);
+	err = err ?: apple_pcie_tun_parse(pcie->dev, np, "apple,tunable-phy", rc_size,
+					  &pcie->tun_phy);
+	err = err ?: apple_pcie_tun_parse(pcie->dev, np, "apple,tunable-phy-fuses", rc_size,
+					  &pcie->tun_fuses);
+	err = err ?: apple_pcie_tun_parse(pcie->dev, np, "apple,tunable-phy-ip-pll", rc_size,
+					  &pcie->tun_pll);
+	err = err ?: apple_pcie_tun_parse(pcie->dev, np, "apple,tunable-phy-ip-auspma", rc_size,
+					  &pcie->tun_auspma);
+	if (!err && apple_pcie_find_ps(pcie)) {
+		dev_info(pcie->dev, "power_off_gp: APCIE_GP/APCIE/PCIE_REF PS registers not found\n");
+		err = -ENODEV;
+	}
+	pcie->cold_ok = !err;
+	dev_info(pcie->dev, "power_off_gp: cold init data %s\n", err ? "missing (refused)" : "found");
+	if (pcie->cold_ok)
+		apple_pcie_log_ps(pcie, "probe");
+}
+
+/* setup_port: per-port data; a port without it makes the controller not cold-capable */
+static void apple_pcie_cold_probe_port(struct apple_pcie *pcie, struct apple_pcie_port *port)
+{
+	struct platform_device *pdev = to_platform_device(pcie->dev);
+	struct resource *res;
+	int err;
+
+	if (!pcie->cold_ok)
+		return;
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	if (!res || resource_size(res) < ((port->idx + 1) << 15))
+		goto fail;
+	port->cfg = ioremap_np(res->start + (port->idx << 15), 0x8000);
+	if (!port->cfg)
+		goto fail;
+	err = apple_pcie_tun_parse(pcie->dev, port->np, "apple,tunable-port-config", 0x4000,
+				   &port->tun_config);
+	err = err ?: apple_pcie_tun_parse(pcie->dev, port->np, "apple,tunable-rc", 0x8000,
+					  &port->tun_rc);
+	err = err ?: apple_pcie_tun_parse(pcie->dev, port->np, "apple,tunable-rc-gen3-shadow",
+					  0x8000, &port->tun_gen3);
+	err = err ?: apple_pcie_tun_parse(pcie->dev, port->np, "apple,tunable-rc-gen4-shadow",
+					  0x8000, &port->tun_gen4);
+	if (err)
+		goto fail;
+	of_property_read_u32(port->np, "apple,max-link-speed", &port->max_speed);
+	return;
+fail:
+	dev_info(pcie->dev, "%pOF: power_off_gp: port cold init data missing (refused)\n", port->np);
+	pcie->cold_ok = false;
+}
+
+static bool apple_pcie_all_ports_off(struct apple_pcie *pcie)
+{
+	struct apple_pcie_port *port;
+
+	list_for_each_entry(port, &pcie->ports, entry)
+		if (!port->powered_off)
+			return false;
+	return !list_empty(&pcie->ports);
+}
+
+/* suspend_noirq, after the ports: m1n1 pcie_shutdown(), then APCIE_GP off */
+static void apple_pcie_ctrl_power_off(struct apple_pcie *pcie)
+{
+	struct apple_pcie_port *port;
+	u32 v;
+	int ret;
+
+	if (!power_off_gp || !pcie->cold_ok || !apple_pcie_all_ports_off(pcie))
+		return;
+	apple_pcie_log_ps(pcie, "power_off_gp: before");
+	list_for_each_entry(port, &pcie->ports, entry) {
+		port->intmsk_saved = readl_relaxed(port->base + PORT_INTMSK);
+		rmw_clear(PORT_PERST_OFF, port->base + PORT_PERST);
+		rmw_clear(PORT_APPCLK_EN, port->base + PORT_APPCLK);
+		dev_info(pcie->dev, "%pOF: port shut down (PHY_LANE_CFG %#x, INTMSK %#x)\n", port->np,
+			 readl_relaxed(port->phy + PHY_LANE_CFG), port->intmsk_saved);
+	}
+	rmw_clear(PHY_CTRL_RESET, pcie->base + CORE_PHY_COMMON);
+	rmw_clear(PHY_CTRL_CLK1REQ, pcie->base + CORE_PHY_COMMON);
+	rmw_clear(PHY_CTRL_CLK0REQ, pcie->base + CORE_PHY_COMMON);
+	pcie->ctrl_off = true;
+	usleep_range(100, 200);
+	apple_pcie_log_ps(pcie, "power_off_gp: controller + shared PHY off");
+
+	if (!(power_off_gp & 0x2))
+		return;
+	regmap_read(pcie->pmgr, pcie->ps_gp, &pcie->ps_gp_saved);
+	regmap_write(pcie->pmgr, pcie->ps_gp,
+		     pcie->ps_gp_saved & ~(PS_AUTO_ENABLE | PS_FLAGS | PS_TARGET));
+	pcie->gp_off = true;
+	ret = regmap_read_poll_timeout(pcie->pmgr, pcie->ps_gp, v,
+				       !FIELD_GET(PS_ACTUAL, v), 10, 100000);
+	dev_info(pcie->dev, "power_off_gp: APCIE_GP %08x -> %08x%s\n", pcie->ps_gp_saved, v,
+		 ret ? " (did not reach 0 in 100 ms)" : "");
+	apple_pcie_log_ps(pcie, "power_off_gp: APCIE_GP off");
+}
+
+/* resume_noirq, before the ports: APCIE_GP back, then m1n1 pcie_init_controller() (t8103) */
+static void apple_pcie_ctrl_power_on(struct apple_pcie *pcie)
+{
+	struct apple_pcie_port *port;
+	void __iomem *phy = pcie->base + CORE_PHY_COMMON;
+	u32 v;
+	int ret;
+
+	if (pcie->gp_off) {
+		pcie->gp_off = false;
+		/* as apple_pmgr_ps_set(): target first without auto, then auto back */
+		regmap_write(pcie->pmgr, pcie->ps_gp,
+			     (pcie->ps_gp_saved & ~(PS_AUTO_ENABLE | PS_FLAGS | PS_TARGET)) | 0xf);
+		ret = regmap_read_poll_timeout(pcie->pmgr, pcie->ps_gp, v,
+					       FIELD_GET(PS_ACTUAL, v) == 0xf, 10, 100000);
+		if (ret)
+			dev_err(pcie->dev, "power_off_gp: APCIE_GP not back on (%08x)\n", v);
+		regmap_write(pcie->pmgr, pcie->ps_gp, pcie->ps_gp_saved & ~PS_FLAGS);
+		apple_pcie_log_ps(pcie, "power_off_gp: APCIE_GP on");
+	}
+	if (!pcie->ctrl_off)
+		return;
+	pcie->ctrl_off = false;
+
+	apple_pcie_tun_apply(pcie, pcie->axi, &pcie->tun_axi2af);
+	writel_relaxed(0, pcie->base + 0x4);	/* m1n1: "???" */
+	apple_pcie_tun_apply(pcie, pcie->base, &pcie->tun_common);
+	apple_pcie_tun_apply(pcie, pcie->base, &pcie->tun_phy);
+
+	rmw_set(PHY_CTRL_CLK0REQ, phy);
+	ret = readl_relaxed_poll_timeout(phy, v, v & PHY_CTRL_CLK0ACK, 10, 50000);
+	if (!ret) {
+		rmw_set(PHY_CTRL_CLK1REQ, phy);
+		ret = readl_relaxed_poll_timeout(phy, v, v & PHY_CTRL_CLK1ACK, 10, 50000);
+	}
+	if (ret) {
+		dev_err(pcie->dev, "cold init: shared PHY clock ack timeout (PHY_CTRL %#x)\n", v);
+		return;
+	}
+	rmw_clear(PHY_CTRL_RESET, phy);
+	udelay(1);
+	rmw_set(CORE_RC_PHYIF_CTL_RUN, pcie->base + CORE_RC_PHYIF_CTL);
+	udelay(1);
+	apple_pcie_tun_apply(pcie, pcie->base, &pcie->tun_fuses);
+	apple_pcie_tun_apply(pcie, pcie->base, &pcie->tun_pll);
+	apple_pcie_tun_apply(pcie, pcie->base, &pcie->tun_auspma);
+
+	list_for_each_entry(port, &pcie->ports, entry) {
+		apple_pcie_tun_apply(pcie, port->base, &port->tun_config);
+		rmw_set(PORT_APPCLK_EN, port->base + PORT_APPCLK);
+		port->cold = true;
+		port->refclk_off = true;	/* the port refclk request was lost with the domain */
+	}
+	apple_pcie_log_ps(pcie, "cold init: controller done");
+}
+
+/* power_on of a cold port, port ready, before link training: DBI as m1n1, setup_port registers */
+static void apple_pcie_port_cold_finish(struct apple_pcie *pcie, struct apple_pcie_port *port)
+{
+	void __iomem *cfg = port->cfg;
+	u32 v;
+
+	port->cold = false;
+	if (readl_relaxed_poll_timeout(port->base + PORT_LINKSTS, v, !(v & PORT_LINKSTS_BUSY),
+				       10, 250000))
+		dev_warn(pcie->dev, "%pOF: cold init: port still busy (%#x)\n", port->np, v);
+
+	rmw_set(DWC_DBI_RO_WR_EN, cfg + DWC_DBI_RO_WR);
+	apple_pcie_tun_apply(pcie, cfg, &port->tun_rc);
+	apple_pcie_tun_apply(pcie, cfg, &port->tun_gen3);
+	apple_pcie_tun_apply(pcie, cfg, &port->tun_gen4);
+	if (port->max_speed) {
+		v = readl_relaxed(cfg + RP_PCIE_CAP + PCI_EXP_LNKCAP) & ~RP_LNKCAP_SLS;
+		writel_relaxed(v | FIELD_PREP(RP_LNKCAP_SLS, port->max_speed),
+			       cfg + RP_PCIE_CAP + PCI_EXP_LNKCAP);
+		v = readl_relaxed(cfg + RP_PCIE_CAP + PCI_EXP_LNKCAP2) & ~RP_LNKCAP2_SLS;
+		writel_relaxed(v | FIELD_PREP(RP_LNKCAP2_SLS, (1 << port->max_speed) - 1),
+			       cfg + RP_PCIE_CAP + PCI_EXP_LNKCAP2);
+		v = readw_relaxed(cfg + RP_PCIE_CAP + PCI_EXP_LNKCTL2) & ~RP_LNKCTL2_TLS;
+		writew_relaxed(v | FIELD_PREP(RP_LNKCTL2_TLS, port->max_speed),
+			       cfg + RP_PCIE_CAP + PCI_EXP_LNKCTL2);
+		rmw_set(DWC_DBI_SPEED_CHANGE, cfg + DWC_DBI_LINK_WIDTH_SPEED_CTL);
+	}
+	/* one lane (t8103 apcie) */
+	v = readl_relaxed(cfg + DWC_DBI_PORT_LINK_CONTROL) & ~DWC_DBI_PORT_LINK_MODE;
+	writel_relaxed(v | FIELD_PREP(DWC_DBI_PORT_LINK_MODE, 1), cfg + DWC_DBI_PORT_LINK_CONTROL);
+	v = readl_relaxed(cfg + DWC_DBI_LINK_WIDTH_SPEED_CTL) & ~DWC_DBI_LINK_WIDTH;
+	writel_relaxed(v | FIELD_PREP(DWC_DBI_LINK_WIDTH, 1), cfg + DWC_DBI_LINK_WIDTH_SPEED_CTL);
+	v = readl_relaxed(cfg + RP_PCIE_CAP + PCI_EXP_LNKCAP) & ~RP_LNKCAP_MLW;
+	writel_relaxed(v | FIELD_PREP(RP_LNKCAP_MLW, 1), cfg + RP_PCIE_CAP + PCI_EXP_LNKCAP);
+	rmw_clear(DWC_DBI_RO_WR_EN, cfg + DWC_DBI_RO_WR);
+
+	/* what setup_port / setup_irq programmed at probe */
+	rmw_clear(PORT_REFCLK_CGDIS, port->base + PORT_REFCLK);
+	rmw_clear(PORT_APPCLK_CGDIS, port->base + PORT_APPCLK);
+	writel_relaxed(~0, port->base + PORT_INTSTAT);
+	writel_relaxed(~0, port->base + PORT_LINKCMDSTS);
+	writel_relaxed(port->intmsk_saved, port->base + PORT_INTMSK);
+	writel_relaxed(lower_32_bits(DOORBELL_ADDR), port->base + pcie->hw->port_msiaddr);
+	writel_relaxed(0, port->base + PORT_MSIBASE);
+	writel_relaxed((ilog2(pcie->nvecs) << PORT_MSICFG_L2MSINUM_SHIFT) | PORT_MSICFG_EN,
+		       port->base + PORT_MSICFG);
+	for (v = 0; v < port->sid_map_sz; v++)
+		apple_pcie_rid2sid_write(port, v, 0);
+	bitmap_zero(port->sid_map, port->sid_map_sz);
+	dev_info(pcie->dev, "%pOF: cold init: DBI + port registers done (LNKCAP %#x)\n", port->np,
+		 readl_relaxed(cfg + RP_PCIE_CAP + PCI_EXP_LNKCAP));
+}
+
 /* host .suspend_noirq: the devices are gone and the root port is suspended: reset, unpower */
 static void apple_pcie_port_power_off(struct apple_pcie *pcie, struct apple_pcie_port *port)
 {
@@ -791,6 +1193,9 @@ static void apple_pcie_port_power_on(struct apple_pcie *pcie, struct apple_pcie_
 		dev_err(pcie->dev, "%pOF: port ready wait timeout after resume\n", port->np);
 		return;
 	}
+
+	if (port->cold)
+		apple_pcie_port_cold_finish(pcie, port);
 
 	if (!(readl_relaxed(port->base + PORT_LINKSTS) & PORT_LINKSTS_UP)) {
 		dev_info(pcie->dev, "%pOF: starting link training\n", port->np);
@@ -925,6 +1330,7 @@ static int apple_pcie_pm_suspend_noirq(struct device *dev)
 	list_for_each_entry(port, &pcie->ports, entry)
 		if (port->removed)
 			apple_pcie_port_power_off(pcie, port);
+	apple_pcie_ctrl_power_off(pcie);
 	return 0;
 }
 
@@ -933,6 +1339,7 @@ static int apple_pcie_pm_resume_noirq(struct device *dev)
 	struct apple_pcie *pcie = apple_pcie_lookup(dev);
 	struct apple_pcie_port *port;
 
+	apple_pcie_ctrl_power_on(pcie);
 	list_for_each_entry(port, &pcie->ports, entry)
 		if (port->powered_off)
 			apple_pcie_port_power_on(pcie, port);
@@ -1030,6 +1437,7 @@ static int apple_pcie_setup_port(struct apple_pcie *pcie,
 	dev_dbg(pcie->dev, "%pOF: %d RID/SID mapping entries\n", np, i);
 
 	port->sid_map_sz = i;
+	apple_pcie_cold_probe_port(pcie, port);
 
 	list_add_tail(&port->entry, &pcie->ports);
 	init_completion(&pcie->event);
@@ -1296,6 +1704,7 @@ static int apple_pcie_probe(struct platform_device *pdev)
 
 	mutex_init(&pcie->lock);
 	INIT_LIST_HEAD(&pcie->ports);
+	apple_pcie_cold_probe(pcie);
 
 	ret = apple_msi_init(pcie);
 	if (ret)

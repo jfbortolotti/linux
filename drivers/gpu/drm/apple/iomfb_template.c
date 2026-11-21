@@ -47,6 +47,7 @@ static void release_wait_cookie(struct kref *ref)
         kfree(cookie);
 }
 
+DCP_THUNK_IN(iomfb_a500_pre_ap_off, iomfbep_a500_pre_ap_off, u32);
 DCP_THUNK_OUT(iomfb_a131_pmu_service_matched, iomfbep_a131_pmu_service_matched, u32);
 DCP_THUNK_OUT(iomfb_a132_backlight_service_matched, iomfbep_a132_backlight_service_matched, u32);
 DCP_THUNK_OUT(iomfb_a358_vi_set_temperature_hint, iomfbep_a358_vi_set_temperature_hint, u32);
@@ -859,6 +860,35 @@ static void complete_set_powerstate(struct apple_dcp *dcp, void *out,
 		complete(&wait->done);
 		kref_put(&wait->refcount, release_wait_cookie);
 	}
+}
+
+/*
+ * A500: sent by macOS between setPowerState(0) and RTKit SetAPPower 0x201
+ * when it stops the DCP; without it the DCP never acks SetAPPower 0x201.
+ * Only known for the 13.x firmware: other tables leave the tag empty.
+ */
+int DCP_FW_NAME(iomfb_a500)(struct apple_dcp *dcp)
+{
+	struct dcp_wait_cookie *cookie;
+	u32 arg = 0;
+	int ret;
+
+	if (!dcp_methods[iomfbep_a500_pre_ap_off].tag[0])
+		return -EOPNOTSUPP;
+
+	cookie = kzalloc(sizeof(*cookie), GFP_KERNEL);
+	if (!cookie)
+		return -ENOMEM;
+	init_completion(&cookie->done);
+	kref_init(&cookie->refcount);
+	/* increase refcount to ensure the receiver has a reference */
+	kref_get(&cookie->refcount);
+
+	iomfb_a500_pre_ap_off(dcp, false, &arg, complete_set_powerstate, cookie);
+	ret = wait_for_completion_timeout(&cookie->done, msecs_to_jiffies(500));
+	kref_put(&cookie->refcount, release_wait_cookie);
+
+	return ret > 0 ? 0 : -ETIMEDOUT;
 }
 
 static void last_client_closed_poff(struct apple_dcp *dcp, void *out, void *cookie)

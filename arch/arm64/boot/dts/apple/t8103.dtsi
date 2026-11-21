@@ -1944,8 +1944,10 @@
 			      <0x6 0x80000000 0x0 0x100000>,
 			      <0x6 0x81000000 0x0 0x4000>,
 			      <0x6 0x82000000 0x0 0x4000>,
-			      <0x6 0x83000000 0x0 0x4000>;
-			reg-names = "config", "rc", "port0", "port1", "port2";
+			      <0x6 0x83000000 0x0 0x4000>,
+			      <0x6 0x8c000000 0x0 0x4000>;
+			/* "axi": ADT apcie reg[4], only for the pcie-apple power_off_gp cold re-init */
+			reg-names = "config", "rc", "port0", "port1", "port2", "axi";
 
 			interrupt-parent = <&aic>;
 			interrupts = <AIC_IRQ 695 IRQ_TYPE_LEVEL_HIGH>,
